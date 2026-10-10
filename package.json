@@ -1,0 +1,10 @@
+{
+  "name": "claude-factory-mod",
+  "private": true,
+  "description": "agent-graph: a Claude Code mod for building and running graphs of agents. Scripts let an agent graph run its checks on this repository.",
+  "scripts": {
+    "test": "claude plugin test agent-graph",
+    "typecheck": "npx -y -p typescript@5 tsc -p agent-graph",
+    "lint": "claude plugin validate agent-graph"
+  }
+}

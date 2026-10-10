@@ -1,0 +1,5 @@
+.superpowers/
+*/.claude-plugin/types/
+.factory/
+node_modules/
+.env*

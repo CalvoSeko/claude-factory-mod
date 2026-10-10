@@ -1,0 +1,21 @@
+{
+  "name": "agent-graph",
+  "version": "0.1.0",
+  "description": "Define agents with skills and context on a drag-and-drop graph, connect them, and run them locally or as Claude Managed Agents.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "anthropicApiKey": {
+      "type": "string",
+      "title": "Anthropic API key",
+      "description": "Used by Cloud graphs (Claude Managed Agents). Leave empty to use this session's own Anthropic login.",
+      "sensitive": true,
+      "required": false
+    },
+    "workspaceId": {
+      "type": "string",
+      "title": "Anthropic workspace id",
+      "description": "For Console links to cloud sessions; leave empty for the Default workspace.",
+      "required": false
+    }
+  }
+}
