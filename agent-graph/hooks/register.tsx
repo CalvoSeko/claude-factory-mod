@@ -6,7 +6,6 @@ import {
   TOOL_PREFIX, toolName, trackSpawn, trackToolCall, trackTurnEnd, type Host,
 } from './actions'
 import type { CanvasPost } from './grid'
-import { ownSpawn } from './guard'
 import { bandButton, drawPane, type PaneParts } from './pane'
 import { EMPTY_UI, type Slots } from './state'
 
@@ -144,10 +143,6 @@ export const register: Register = (on, options) => {
     const why = guard.check(e.agentId, e.subagent_type)
     return why === undefined ? next(e) : { deny: why }
   })
-
-  // The mod's own starts of its card agents are allowed, so runs also work in auto mode.
-  on('tool.check', { tool: 'Agent' }, ($, e, next) =>
-    ownSpawn(next.origin.plugin, e.input) ? { decision: 'allow', reason: 'Started by an agent-graph run.' } : next(e))
 
   // A spawn under an agent of the run nests the child's calls under the parent's delegate call.
   on('agent.spawn', ($, e, next) => trackSpawn(activityRun(), e, () => next(e)))

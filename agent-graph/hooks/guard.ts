@@ -1,14 +1,6 @@
 // Which agent types each running Local node may start with the Agent tool.
 export type Guard = ReturnType<typeof createGuard>
 
-// True for the mod's own start of one of its card agents, which the person asked for by running the graph.
-// Auto mode's classifier cannot judge such a start (it finds no request for it in the transcript), so the
-// mod answers for it; what the agent then does is still checked as usual.
-export function ownSpawn(originPlugin: string, input: unknown): boolean {
-  const type = (input as { subagent_type?: unknown } | null | undefined)?.subagent_type
-  return originPlugin === 'agent-graph' && typeof type === 'string' && type.startsWith('agent-graph:')
-}
-
 export function createGuard() {
   const allowed = new Map<string, Set<string>>()
   const stopped = new Set<string>()

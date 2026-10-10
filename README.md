@@ -28,7 +28,7 @@ Cloud graphs use your Claude Code Anthropic login, or an API key set in the plug
 
 ## Auto mode
 
-Runs start their card agents themselves, which auto mode's classifier cannot judge. The mod therefore allows its own starts of its own card agent types (`agent-graph:*`) — nothing else. Every action those agents take is still checked by your permission mode as usual.
+Runs do not work in auto mode yet. The mod starts each card's agent itself, and auto mode's classifier cannot judge an agent start that no message in the conversation asked for, so the card fails ("gave no verdict for Agent"). Plugins have no way to approve their own agent starts, so until Claude Code changes this, switch to another permission mode (for example Accept edits) before starting a run and keep it until the run ends.
 
 ## Develop
 
