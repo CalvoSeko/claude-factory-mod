@@ -12,12 +12,13 @@ declare const setTimeout: (run: () => void, ms?: number) => unknown
 
 // The actions over a host made of plain maps (as tests/run-history.test.ts does), with a local agent that
 // answers at once (or is held), and a grader that answers from a script.
-const node = (id: string, name: string, x: number, patch: Partial<AgentNode> = {}): AgentNode => ({
-  id, name, x, y: 1, instructionsFile: `/tmp/${id}.md`, skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2, ...patch,
+// An agent card with its instructions file in its graph's own folder (no home in these tests).
+const node = (graphId: string, id: string, name: string, x: number, patch: Partial<AgentNode> = {}): AgentNode => ({
+  id, name, x, y: 1, instructionsFile: `./.claude/agent-graph/${graphId}/${id}.md`, skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2, ...patch,
 })
 const flow = (id: string, patch: Partial<AgentNode> = {}): Graph => ({
   id, name: 'Flow', description: '', backend: 'local', layout: 2,
-  nodes: [node('a', 'Alpha', 2, patch), node('b', 'Bravo', 40)],
+  nodes: [node(id, 'a', 'Alpha', 2, patch), node(id, 'b', 'Bravo', 40)],
   edges: [{ id: 'e1', from: 'a', to: 'b', kind: 'handoff' }],
 })
 

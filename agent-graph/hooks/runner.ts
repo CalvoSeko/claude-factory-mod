@@ -1,7 +1,7 @@
 import type { ActivityItem, AgentNode, Graph, NodeRunView, OutputFile, RestartEntry, RoundEntry, RunView } from '../types'
 import { clip, STOPPED_TEXT, UNFINISHED_TEXT, type HelperCall, type Tracker } from './activity'
 import { handoffNames } from './compile'
-import { DEFAULT_RETRIES, endNodes, handoffDir, incoming, isCheck, isDelegateOnly, loopOf, nodeById, retryOut, runnableNodes, validate, type Problem } from './model'
+import { DEFAULT_RETRIES, endNodes, handoffDir, incoming, isCheck, isDelegateOnly, loopOf, MAX_RETRIES, nodeById, retryOut, runnableNodes, validate, type Problem } from './model'
 import { MAX_RESTARTS, restartDelay, type Transient } from './transient'
 
 export type Handoff = { from: string; text: string; files: OutputFile[] }
@@ -402,7 +402,7 @@ export async function runGraph(
       }
       return stamping
     }
-    const retries = edge.retries ?? DEFAULT_RETRIES
+    const retries = Number.isInteger(edge.retries) && edge.retries! >= 0 ? Math.min(edge.retries!, MAX_RETRIES) : DEFAULT_RETRIES
     if (round - 1 >= retries) {
       v.status = 'failed'
       v.error = `Still failing after ${retries} retries: ${verdict.note}`

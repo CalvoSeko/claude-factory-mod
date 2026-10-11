@@ -2,6 +2,9 @@
 // Pure: register.tsx feeds the meter from `turn.step`, the Local backend reads it. Prices are list prices of
 // 2026-10-09 in USD per million tokens; when they change, this is the one place to edit.
 
+import type { AgentNode } from '../types'
+import { DEFAULT_BUDGET_USD } from './model'
+
 export type Usage = {
   model: string
   input_tokens: number
@@ -158,6 +161,9 @@ export function runSpend(nodes: Record<string, { costUsd?: number; costEstimated
 
 // A cap as the person set it: a positive finite number.
 export const isCap = (cap: unknown): cap is number => typeof cap === 'number' && Number.isFinite(cap) && cap > 0
+
+// The budget a run enforces: the card's when it is a positive finite number, else the default (never "no budget").
+export const budgetOf = (node: AgentNode): number => (isCap(node.budgetUsd) ? node.budgetUsd : DEFAULT_BUDGET_USD)
 
 // The toolbar's "spent / cap" while a capped run goes.
 export const capText = (spent: { usd: number; estimated: boolean }, cap: number): string => `${usdText(spent.usd, spent.estimated)} / $${cap.toFixed(2)}`

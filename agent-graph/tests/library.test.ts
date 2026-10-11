@@ -1,7 +1,9 @@
 import { expect } from 'claude-code/testing'
 import { test } from './kit'
 
-import { asGraph, createLibrary, type KeyValue, type TextFiles } from '../hooks/library'
+import { asGraph, createLibrary, inGraphFolder, type KeyValue, type TextFiles } from '../hooks/library'
+
+const ROOT = '/home/.claude/agent-graph'
 
 function fakes() {
   const kv = new Map<string, unknown>()
@@ -11,13 +13,14 @@ function fakes() {
     set: async (k, v) => void kv.set(k, v),
     delete: async k => void kv.delete(k),
   }
+  // Like the mod's own adapter, a change outside the graph's folder does nothing.
   const text: TextFiles = {
     read: async p => files.get(p),
-    write: async (p, t) => void files.set(p, t),
-    remove: async p => void files.delete(p),
-    removeDir: async p => void [...files.keys()].filter(k => k.startsWith(`${p}/`)).forEach(k => files.delete(k)),
+    write: async (g, p, t) => void (inGraphFolder(ROOT, g, p) && files.set(p, t)),
+    remove: async (g, p) => void (inGraphFolder(ROOT, g, p) && files.delete(p)),
+    removeDir: async g => void [...files.keys()].filter(k => k.startsWith(`${ROOT}/${g}/`)).forEach(k => files.delete(k)),
   }
-  return { kv, files, library: createLibrary(store, text, '/home/.claude/agent-graph') }
+  return { kv, files, library: createLibrary(store, text, ROOT) }
 }
 
 test('created graphs are saved, indexed and named uniquely', async () => {

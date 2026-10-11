@@ -329,7 +329,7 @@ test('a run Claude starts that reaches the cap submits the cap ending with the r
   expect(JSON.stringify(reply)).toContain('Started agent graph')
   await untilEnded(0)
   expect(submitted).toHaveLength(1)
-  expect(submitted[0]).toMatch(/^Agent graph "Flow" was stopped at its \$1\.00 cap\.\n\n/)
+  expect(submitted[0]).toMatch(/>>>\nAgent graph "Flow" was stopped at its \$1\.00 cap\.\n\n/)
   expect(recordsOf('g-claude')[0]).toMatchObject({ mode: 'tool', ending: 'over-cap' })
   await pane.unmount()
 })

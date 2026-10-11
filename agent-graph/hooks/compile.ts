@@ -20,6 +20,9 @@ export type LocalAgentSpec = {
 
 export const LOCAL_CONTEXT_LIMIT = 200 * 1024
 
+// Text cmd cannot re-parse: letters, digits, space, _ - . : / \ only.
+export const isCmdSafe = (text: string): boolean => /^[A-Za-z0-9 _\-.:/\\]*$/.test(text)
+
 // Unique by node id (names can share a slug), and at most 64 characters (the
 // engine's limit on an agent type's name): 25 + 2 + 29 + 1 + 6.
 export const agentName = (g: Graph, n: AgentNode) => `${slug(g.name).slice(0, 25)}--${slug(n.name).slice(0, 29)}-${n.id.slice(-6)}`

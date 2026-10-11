@@ -12,12 +12,13 @@ declare const setTimeout: (run: () => void, ms?: number) => unknown
 
 // The actions over a host made of plain maps: state, store and files in memory, and a local
 // agent that answers at once (or is held until it is stopped).
-const node = (id: string, name: string, x: number): AgentNode => ({
-  id, name, x, y: 1, instructionsFile: `/tmp/${id}.md`, skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2,
+// A graph's cards keep their instructions files in its own folder under `home` ('.' when the host has none).
+const node = (graphId: string, id: string, name: string, x: number, home = '.'): AgentNode => ({
+  id, name, x, y: 1, instructionsFile: `${home}/.claude/agent-graph/${graphId}/${id}.md`, skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2,
 })
-const flow = (id: string): Graph => ({
+const flow = (id: string, home = '.'): Graph => ({
   id, name: 'Flow', description: '', backend: 'local', layout: 2,
-  nodes: [node('a', 'Alpha', 2), node('b', 'Bravo', 40)],
+  nodes: [node(id, 'a', 'Alpha', 2, home), node(id, 'b', 'Bravo', 40, home)],
   edges: [{ id: 'e1', from: 'a', to: 'b', kind: 'handoff' }],
 })
 
@@ -319,7 +320,7 @@ test('a run started by Claude reports its failed agents in the message it sends'
   m.host.prompt.submit = (async ({ text }: { text: string }) => void sent.push(text)) as unknown as Host['prompt']['submit']
   expect(await startRun(m.host, g, 'Do it', 'tool')).toBeUndefined()
   await until(() => sent.length > 0)
-  expect(sent[0]!.startsWith('Agent graph "Flow" finished with 1 failed agent.\n\n')).toBe(true)
+  expect(sent[0]).toMatch(/>>>\nAgent graph "Flow" finished with 1 failed agent\.\n\n/)
 })
 
 test('loadLastRun reads an entry once, and a miss once too', async () => {
@@ -457,17 +458,17 @@ function withHome(m: Memory, os: string | undefined = undefined) {
 const folderDeletes = (argvs: string[][]) => argvs.filter(argv => argv.includes('-rf') || argv.includes('rmdir'))
 
 test('deleting a graph removes its folder in one process and drops the stashed texts of its deleted agents', async () => {
-  const g = flow('h-folder')
+  const g = flow('h-folder', '/home/u')
   const m = memory(g)
   m.kv.set('graphs', [{ id: g.id, name: g.name }])
   const argvs = withHome(m)
   await runTo(m, g, 'First task')
   await runTo(m, g, 'Second task')
   await deleteNode(m.host, 'b')
-  expect(stashed.has('/tmp/b.md')).toBe(true)
+  expect(stashed.has('/home/u/.claude/agent-graph/h-folder/b.md')).toBe(true)
   argvs.length = 0
   await deleteGraph(m.host)
-  expect(stashed.has('/tmp/b.md')).toBe(false)
+  expect(stashed.has('/home/u/.claude/agent-graph/h-folder/b.md')).toBe(false)
   expect(folderDeletes(argvs)).toEqual([['rm', '-rf', `/home/u/.claude/agent-graph/${g.id}`]])
   // The folder takes the instructions files along: no process per file.
   expect(argvs).toHaveLength(1)
@@ -482,20 +483,25 @@ test('on Windows the graph folder is removed with rmdir and backslashes', async 
   expect(folderDeletes(argvs)).toEqual([['cmd', '/c', 'rmdir', '/s', '/q', `\\home\\u\\.claude\\agent-graph\\${g.id}`]])
 })
 
-test('a graph id that is not a plain token never reaches the recursive delete; its known files are removed instead', async () => {
+test('a graph id that is not a plain token writes and deletes nothing on disk, and says so', async () => {
   for (const id of ['', '../x', 'a/b', 'x"&y']) {
-    const g = flow(id)
+    const g = flow(id, '/home/u')
     const m = memory(g)
     m.kv.set('graphs', [{ id: g.id, name: g.name }])
     const argvs = withHome(m)
     await runTo(m, g, 'Do it')
+    expect([...m.fs.keys()].filter(p => p.includes('/runs/')), `id "${id}": no record file written`).toEqual([])
+    // A record file at the place the index names (left by an older version) is kept as well.
+    const record = `/home/u/.claude/agent-graph/${id}/runs/${indexOf(m, g.id).runs[0]!.id}.json`
+    m.fs.set(record, '{}')
     m.fs.set('/home/u/.claude/agent-graph/other/n.md', 'Other graph.')
-    const records = [...m.fs.keys()].filter(p => p.includes('/runs/'))
-    expect(records.length, `id "${id}": a record was written`).toBe(1)
+    argvs.length = 0
     await deleteGraph(m.host)
-    expect(folderDeletes(argvs), `id "${id}"`).toEqual([])
+    expect(argvs, `id "${id}": no process runs`).toEqual([])
+    expect(m.fs.has(record), `id "${id}": the record file stays`).toBe(true)
+    expect(m.fs.has(g.nodes[0]!.instructionsFile), `id "${id}": the card file stays`).toBe(true)
     expect(m.fs.has('/home/u/.claude/agent-graph/other/n.md'), `id "${id}": other graphs keep their files`).toBe(true)
-    expect([...m.fs.keys()].filter(p => p.includes('/runs/')), `id "${id}": records removed one by one`).toEqual([])
+    expect(m.toasts, `id "${id}"`).toContain(`Did not change ${record}: it is outside this graph's folder.`)
   }
 })
 
@@ -565,7 +571,7 @@ test('a reused entry shows the edited input of the run it came from', async () =
 
 test('From here on a helper that only another agent delegates to names it in the notice', async () => {
   const base = flow('h-helper')
-  const g: Graph = { ...base, nodes: [node('c', 'Coordinator', 2), node('h', 'Helper', 40)], edges: [{ id: 'e1', from: 'c', to: 'h', kind: 'delegate' }] }
+  const g: Graph = { ...base, nodes: [node('h-helper', 'c', 'Coordinator', 2), node('h-helper', 'h', 'Helper', 40)], edges: [{ id: 'e1', from: 'c', to: 'h', kind: 'delegate' }] }
   const m = memory(g)
   m.slots.ui = { ...m.slots.ui, task: 'Do it' }
   await runFromNode(m.host, 'h')
@@ -602,7 +608,7 @@ test('a problem on an agent that is reused does not stop the run; one on an agen
 })
 
 test('a run that cannot be set up says so, keeps no record and frees the run lock', async () => {
-  const g: Graph = { ...flow('h-setup'), nodes: [{ ...node('a', 'Alpha', 2), contextFiles: ['/ctx'] }, node('b', 'Bravo', 40)] }
+  const g: Graph = { ...flow('h-setup'), nodes: [{ ...node('h-setup', 'a', 'Alpha', 2), contextFiles: ['/ctx'] }, node('h-setup', 'b', 'Bravo', 40)] }
   const m = memory(g)
   m.fs.set('/ctx', 'context')
   const exists = m.host.fs.exists
@@ -615,7 +621,7 @@ test('a run that cannot be set up says so, keeps no record and frees the run loc
   m.host.prompt.submit = (async ({ text }: { text: string }) => void sent.push(text)) as unknown as Host['prompt']['submit']
   expect(await startRun(m.host, g, 'Do it', 'tool')).toBeUndefined()
   await until(() => sent.length > 0)
-  expect(sent[0]).toBe('Agent graph "Flow" failed: disk gone')
+  expect(sent[0]).toMatch(/>>>\nAgent graph "Flow" failed: disk gone\n<<<end-/)
   expect(m.slots.run).toMatchObject({ isRunning: false, result: 'Agent graph "Flow" failed: disk gone' })
   expect(m.kv.get(`runs:${g.id}`)).toBeUndefined()
   expect(m.spawnedCount()).toBe(0)
@@ -720,7 +726,8 @@ test('a run stopped before its start fires still says it was stopped', async () 
   expect(await startRun(m.host, g, 'Do it', 'tool')).toBeUndefined()
   stopRun()
   await until(() => sent.length > 0)
-  expect(sent).toEqual(['Agent graph "Flow" was stopped.'])
+  expect(sent).toHaveLength(1)
+  expect(sent[0]).toMatch(/>>>\nAgent graph "Flow" was stopped\.\n<<<end-/)
   expect(await startRun(m.host, g, 'Again', 'pane')).toBeUndefined()
   stopRun()
   expect(m.toasts).toContain('Agent graph "Flow" was stopped')
@@ -730,7 +737,7 @@ test('Run with this input on a card inside a retry loop plans from that card: th
   // Alpha -> Bravo -> Charlie; Charlie (a reviewer with no VERDICT line, so it fails every round) sends work back to Alpha once.
   const g: Graph = {
     id: 'h-loop-input', name: 'Flow', description: '', backend: 'local', layout: 2,
-    nodes: [node('a', 'Alpha', 2), node('b', 'Bravo', 40), node('c', 'Charlie', 78)],
+    nodes: [node('h-loop-input', 'a', 'Alpha', 2), node('h-loop-input', 'b', 'Bravo', 40), node('h-loop-input', 'c', 'Charlie', 78)],
     edges: [
       { id: 'e1', from: 'a', to: 'b', kind: 'handoff' }, { id: 'e2', from: 'b', to: 'c', kind: 'handoff' },
       { id: 'e3', from: 'c', to: 'a', kind: 'retry', retries: 1 },

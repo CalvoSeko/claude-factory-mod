@@ -5,7 +5,7 @@ import type { RenderElement } from 'claude-code'
 import type { Graph } from '../types'
 
 const node = (id: string, name: string, x: number) => ({
-  id, name, x, y: 1, instructionsFile: `/tmp/${id}.md`, skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2,
+  id, name, x, y: 1, instructionsFile: `./.claude/agent-graph/g1/${id}.md`, skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2,
 })
 const graph: Graph = {
   id: 'g1', name: 'Flow', description: '', backend: 'local', layout: 2,
@@ -118,7 +118,7 @@ test('the edit button on a card opens that agent file in the editor', async ($, 
   on('fs.read', () => ({ value: 'Do the work.' }) as never)
   const pane = await openPane($, on, graph, true)
   await pane.post({ events: [{ kind: 'press', node: 'b', action: 'edit' }] })
-  expect(ran.some(argv => argv.includes('/tmp/b.md'))).toBe(true)
+  expect(ran.some(argv => argv.includes('./.claude/agent-graph/g1/b.md'))).toBe(true)
   await pane.unmount()
 })
 

@@ -7,10 +7,13 @@ import { INSTRUCTIONS_TEMPLATE } from '../hooks/model'
 import type { AgentNode, Graph, RunView } from '../types'
 
 const node = (id: string, name: string, x: number, y = 1): AgentNode => ({
-  id, name, x, y, instructionsFile: `/tmp/${id}.md`, skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2,
+  id, name, x, y, instructionsFile: '', skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2,
 })
+// An agent's instructions file, in its graph's own folder under the home these tests give (USERPROFILE).
+const HOME = '/home/u'
+const fileOf = (graphId: string, id: string) => `${HOME}/.claude/agent-graph/${graphId}/${id}.md`
 const flow = (id: string, nodes: AgentNode[], edges: Graph['edges'] = []): Graph => ({
-  id, name: 'Flow', description: '', backend: 'local', layout: 2, nodes, edges,
+  id, name: 'Flow', description: '', backend: 'local', layout: 2, nodes: nodes.map(n => ({ ...n, instructionsFile: fileOf(id, n.id) })), edges,
 })
 const BAND = {
   plugin: 'agent-graph', component: 'AbovePrompt',
@@ -76,7 +79,7 @@ async function openPane($: Args[0], on: Args[1], g: Graph, content: (path: strin
   })
   on('agent.register', () => ({ value: undefined }) as never)
   on('agent.spawn', () => ({ model: 'm', agentId: `ag${++spawned}` }) as never)
-  on('env.get', () => ({ value: undefined }) as never)
+  on('env.get', (_$, e) => ({ value: (e as unknown as { name: string }).name === 'USERPROFILE' ? HOME : undefined }) as never)
   on('ui.message', () => ({ value: undefined }) as never)
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -198,14 +201,14 @@ test('undo and redo walk a rename; a new edit clears redo', async ($, on) => {
 
 test('undoing a delete brings the agent back with its instructions text', async ($, on) => {
   const g = flow('g-del', [node('a', 'Researcher', 2), node('b', 'Writer', 40)], [{ id: 'e1', from: 'a', to: 'b', kind: 'handoff' }])
-  const pane = await openPane($, on, g, path => (path === '/tmp/b.md' ? 'Write like Orwell.' : 'Research.'))
+  const pane = await openPane($, on, g, path => (path === fileOf('g-del', 'b') ? 'Write like Orwell.' : 'Research.'))
   await pane.post({ events: [{ kind: 'press', node: 'b', action: 'delete' }] })
   expect(await namesOf(pane)).toEqual(['Researcher'])
-  expect(files.has('/tmp/b.md')).toBe(false)
+  expect(files.has(fileOf('g-del', 'b'))).toBe(false)
   await key(pane, 'z', { ctrl: true })
   expect(await namesOf(pane)).toEqual(['Researcher', 'Writer'])
   expect(await edgesOfPane(pane)).toHaveLength(1)
-  expect(files.get('/tmp/b.md')).toBe('Write like Orwell.')
+  expect(files.get(fileOf('g-del', 'b'))).toBe('Write like Orwell.')
   await key(pane, 'y', { ctrl: true })
   expect(await namesOf(pane)).toEqual(['Researcher'])
   await pane.unmount()
@@ -217,7 +220,7 @@ test('undoing a delete whose file was never read falls back to the starter templ
   expect(await namesOf(pane)).toEqual([])
   await key(pane, 'z', { ctrl: true })
   expect(await namesOf(pane)).toEqual(['Researcher'])
-  expect(files.get('/tmp/a.md')).toBe(INSTRUCTIONS_TEMPLATE('Researcher'))
+  expect(files.get(fileOf('g-del2', 'a'))).toBe(INSTRUCTIONS_TEMPLATE('Researcher'))
   await pane.unmount()
 })
 
@@ -259,7 +262,7 @@ test('an empty graph still asks for an agent', async ($, on) => {
 
 test('warnings are listed under the toolbar while Run stays available', async ($, on) => {
   const g = flow('g-warn', [node('a', 'Researcher', 2), { ...node('b', 'Writer', 40), whenToUse: '' }], [{ id: 'e1', from: 'a', to: 'b', kind: 'delegate' }])
-  const pane = await openPane($, on, g, path => (path === '/tmp/a.md' ? INSTRUCTIONS_TEMPLATE('Researcher') : 'Write well.'))
+  const pane = await openPane($, on, g, path => (path === fileOf('g-warn', 'a') ? INSTRUCTIONS_TEMPLATE('Researcher') : 'Write well.'))
   expect(await pane.find({ key: 'run' })).toBeDefined()
   const warnings = (await pane.findAll({ type: 'Button' })).filter(b => String(b.props.label).startsWith('△'))
   expect(warnings.map(b => b.props.label)).toEqual([

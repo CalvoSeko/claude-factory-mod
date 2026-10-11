@@ -1,17 +1,18 @@
 import { expect } from 'claude-code/testing'
 import { test } from './kit'
 
-import type { TextFiles } from '../hooks/library'
+import { inGraphFolder, type TextFiles } from '../hooks/library'
 import { createTestStore, gradePrompt, parseVerdict, testName } from '../hooks/tests'
 import type { TestCase } from '../types'
 
 const memory = () => {
   const map = new Map<string, string>()
+  // Like the mod's own adapter, a change outside the graph's folder does nothing.
   const files: TextFiles = {
     read: async path => map.get(path),
-    write: async (path, text) => void map.set(path, text),
-    remove: async path => void map.delete(path),
-    removeDir: async path => void [...map.keys()].filter(k => k.startsWith(`${path}/`)).forEach(k => map.delete(k)),
+    write: async (graphId, path, text) => void (inGraphFolder('/root', graphId, path) && map.set(path, text)),
+    remove: async (graphId, path) => void (inGraphFolder('/root', graphId, path) && map.delete(path)),
+    removeDir: async graphId => void [...map.keys()].filter(k => k.startsWith(`/root/${graphId}/`)).forEach(k => map.delete(k)),
   }
   return { map, files }
 }

@@ -31,9 +31,9 @@ export function createTestStore(files: TextFiles, root: string) {
     }
   }
 
-  const save = (graphId: string, tests: TestCase[]): Promise<void> => files.write(fileOf(graphId), JSON.stringify(tests, null, 2))
+  const save = (graphId: string, tests: TestCase[]): Promise<void> => files.write(graphId, fileOf(graphId), JSON.stringify(tests, null, 2))
 
-  const removeGraph = (graphId: string): Promise<void> => files.remove(fileOf(graphId))
+  const removeGraph = (graphId: string): Promise<void> => files.remove(graphId, fileOf(graphId))
 
   return { list, save, removeGraph }
 }

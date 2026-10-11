@@ -50,6 +50,8 @@ export type Graph = {
   edges: Edge[]
   runCapUsd?: number  // a dollar cap per run: the run is stopped when its cost reaches it
   layout?: 2  // 2: positions are for the 26×5 cards
+  // false: imported and not yet approved in the pane (no tool, runs refused). Absent counts as trusted.
+  trusted?: boolean
 }
 
 export type GraphIndexEntry = { id: string; name: string }
@@ -196,6 +198,8 @@ export type PaneUi = {
   // The test whose "must hold" notes are being edited, and the test whose delete is waiting for a second press.
   editingTest?: string | null
   armedTest?: string | null
+  // The graph whose approval view is open (Run on an untrusted graph).
+  approving?: string | null
 }
 
 // A saved run turned into a test: re-run against the current graph and graded against the accepted result.

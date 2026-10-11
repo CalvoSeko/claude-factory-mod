@@ -5,7 +5,7 @@ import type { RenderElement } from 'claude-code'
 import type { Graph, NodeRecord, RunIndex, RunRecord } from '../types'
 
 const node = (id: string, name: string, x: number) => ({
-  id, name, x, y: 1, instructionsFile: `/tmp/${id}.md`, skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2,
+  id, name, x, y: 1, instructionsFile: `./.claude/agent-graph/g1/${id}.md`, skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2,
 })
 const graph: Graph = {
   id: 'g1', name: 'Flow', description: '', backend: 'local', layout: 2,
@@ -557,7 +557,7 @@ test('a queued press of one canvas is not lost when another canvas is mounted', 
   await first.press({ key: 'card-edit-b' })
   const second = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await first.advance(16)
-  expect(ran.some(argv => argv.includes('/tmp/b.md'))).toBe(true)
+  expect(ran.some(argv => argv.includes('./.claude/agent-graph/g1/b.md'))).toBe(true)
   await second.unmount()
   await first.unmount()
 })

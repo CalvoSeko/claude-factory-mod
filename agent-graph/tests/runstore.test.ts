@@ -3,7 +3,7 @@ import { test } from './kit'
 
 import type { AgentNode, Graph, RunIndex, RunRecord } from '../types'
 import { RUNS_KEPT } from '../hooks/records'
-import type { KeyValue, TextFiles } from '../hooks/library'
+import { inGraphFolder, type KeyValue, type TextFiles } from '../hooks/library'
 import { createRunStore } from '../hooks/runstore'
 
 const ROOT = '/home/.claude/agent-graph'
@@ -18,11 +18,12 @@ function fakes() {
     set: async (k, v) => void kv.set(k, v),
     delete: async k => void kv.delete(k),
   }
+  // Like the mod's own adapter, a change outside the graph's folder does nothing.
   const text: TextFiles = {
     read: async p => files.get(p),
-    write: async (p, t) => void files.set(p, t),
-    remove: async p => void (calls.push(`remove ${p}`), files.delete(p)),
-    removeDir: async p => void (calls.push(`removeDir ${p}`), [...files.keys()].filter(k => k.startsWith(`${p}/`)).forEach(k => files.delete(k))),
+    write: async (g, p, t) => void (inGraphFolder(ROOT, g, p) && files.set(p, t)),
+    remove: async (g, p) => void (calls.push(`remove ${p}`), inGraphFolder(ROOT, g, p) && files.delete(p)),
+    removeDir: async g => void (calls.push(`removeDir ${g}`), [...files.keys()].filter(k => k.startsWith(`${ROOT}/${g}/`)).forEach(k => files.delete(k))),
   }
   return { kv, files, calls, runs: createRunStore(store, text, ROOT) }
 }
@@ -141,9 +142,9 @@ test('write leaves no record file behind when the index cannot be saved', async 
   }
   const text: TextFiles = {
     read: async p => files.get(p),
-    write: async (p, t) => void files.set(p, t),
-    remove: async p => void files.delete(p),
-    removeDir: async p => void [...files.keys()].filter(k => k.startsWith(`${p}/`)).forEach(k => files.delete(k)),
+    write: async (g, p, t) => void (inGraphFolder(ROOT, g, p) && files.set(p, t)),
+    remove: async (g, p) => void (inGraphFolder(ROOT, g, p) && files.delete(p)),
+    removeDir: async g => void [...files.keys()].filter(k => k.startsWith(`${ROOT}/${g}/`)).forEach(k => files.delete(k)),
   }
   const runs = createRunStore(store, text, ROOT)
   let failure = ''

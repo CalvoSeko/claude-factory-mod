@@ -5,10 +5,10 @@
 import type { AgentNode, Graph } from '../types'
 import { clip, STOPPED_TEXT, UNFINISHED_TEXT, type Tracker } from './activity'
 import {
-  agentName, contextSize, firstLine, gatherContext, LOCAL_CONTEXT_LIMIT, localPrompt, localSpec, systemText, VERDICT_SECTION,
+  agentName, contextSize, firstLine, gatherContext, isCmdSafe, LOCAL_CONTEXT_LIMIT, localPrompt, localSpec, systemText, VERDICT_SECTION,
   type ContextSource, type LocalAgentSpec,
 } from './compile'
-import { requestUsd } from './cost'
+import { budgetOf, requestUsd } from './cost'
 import type { CommandChunk, CommandEnd } from './local'
 import { isCheck, nodeById, outgoing, retryOut, type Problem } from './model'
 import type { Backend, NodeOutcome } from './runner'
@@ -166,7 +166,8 @@ export type HeadlessDeps = {
 export const agentsFile = (home: string, g: Graph, node: AgentNode) => `${home}/.claude/agent-graph/${g.id}/headless/${agentName(g, node)}.json`
 
 // The child is a session of its own: it loads no agent-graph again and inherits none of this session's links to its
-// desktop host (auth refresh, session ids, the messaging socket).
+// desktop host (auth refresh, session ids, the messaging socket). `$.process.spawn` can only set variables over the
+// host's environment, so the child inherits the rest of it.
 export const CHILD_ENV: Record<string, string> = {
   CLAUDE_CODE_PLUGIN_DIRS: '',
   CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: '',
@@ -246,8 +247,15 @@ export function createHeadlessBackend(graph: Graph, deps: HeadlessDeps): Backend
           if (n !== undefined && spec !== undefined) agents[agentName(g, n)] = spec
           queue.push(...outgoing(g, id, 'delegate').map(e => e.to))
         }
+        // The path and the name go on `claude`'s argv: like every path the mod hands on, they must be text cmd cannot
+        // re-parse (on every OS: the backend does not know which it runs on).
+        const file = agentsFile(await deps.home(), g, node)
+        if (!isCmdSafe(file) || !isCmdSafe(agentName(g, node))) {
+          onNode(node, `Cannot run: its settings path ${file} may only have letters, digits, spaces and _ - . : / \\.`)
+          continue
+        }
         try {
-          await deps.write(agentsFile(await deps.home(), g, node), JSON.stringify(agents))
+          await deps.write(file, JSON.stringify(agents))
         } catch (error) {
           onNode(node, `Could not write this agent's settings: ${messageOf(error)}`)
         }
@@ -257,14 +265,13 @@ export function createHeadlessBackend(graph: Graph, deps: HeadlessDeps): Backend
 
     async start(node, prompt, inputs, onCost) {
       if (isCheck(node)) return deps.checks.start(node, prompt, inputs, onCost)
-      const budget = node.budgetUsd
-      const hasBudget = Number.isFinite(budget) && budget > 0
+      const budget = budgetOf(node)
       const argv = [
         (await deps.execPath?.()) || 'claude', '-p', '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose',
         // A card's run is not one to resume: it stays out of the person's session list.
         '--no-session-persistence',
         '--agents', agentsFile(await deps.home(), graph, node), '--agent', agentName(graph, node),
-        ...(hasBudget ? ['--max-budget-usd', String(budget)] : []),
+        '--max-budget-usd', String(budget),
       ]
       const over: NodeOutcome = { ok: false, reason: `Hit its $${budget} budget.` }
       const report = (usd: number, estimated: boolean) => quietly(() => onCost(usd, estimated))
@@ -340,7 +347,7 @@ export function createHeadlessBackend(graph: Graph, deps: HeadlessDeps): Backend
           return fail(detail, transientOfText(detail))
         }
         if (result.costUsd !== undefined) report(result.costUsd, false)
-        if (result.subtype === 'error_max_budget_usd' || (hasBudget && result.costUsd !== undefined && result.costUsd >= budget)) return over
+        if (result.subtype === 'error_max_budget_usd' || (result.costUsd !== undefined && result.costUsd >= budget)) return over
         if (result.subtype === 'success' && !result.isError) return { ok: true, text: result.text, files: [] }
         const detail = result.ownText !== '' ? result.ownText : end.other.trim() !== '' ? end.other.trim().slice(-DETAIL_CHARS) : result.subtype
         const status = result.apiErrorStatus

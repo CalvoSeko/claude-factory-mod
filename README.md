@@ -9,6 +9,7 @@
 - **Retries after temporary failures.** An agent stopped by a usage limit, an overload (429/529), a network or a server error is started again after 30 s, 2 min, then 5 min (or the stated reset time), up to 3 times.
 - **Local, Headless or Cloud.** Run agents as Claude Code subagents of your session, as their own headless Claude Code processes, or as Claude Managed Agents.
 - **Claude can run your graphs.** Each graph is also a tool the main Claude session can call with a task.
+- **Claude can read and edit your graphs.** `read_graph` shows a graph's cards, instructions and arrows; `edit_graph` applies a batch of changes as one undo step. Your permission rules decide whether an edit asks first, and adding or changing a check card's shell command always asks.
 
 ## Install
 
@@ -23,13 +24,17 @@ To load it in every session, add the folder to `CLAUDE_CODE_PLUGIN_DIRS` in the 
 
 Graphs saved as JSON in `~/.claude/agent-graph/import/` are imported when a session starts or `/agent-graph` runs.
 
+## Shared graphs
+
+A graph runs agents and shell commands on your machine with your permissions. An imported graph therefore starts **untrusted**: it gets no tool, Claude cannot read, edit or run it, and pressing Run first shows everything it would do (each check command, each card's tools, model, budget and context files, its helpers and description). It runs only after you press **Trust and run**. Imports are also checked and clamped (ids, budgets, retries, run cap), and the mod only ever writes or deletes files inside the graph's own folder. Only trust graphs from people you trust. See `HOW-IT-WORKS.md` ("Shared graphs").
+
 ## Cloud graphs
 
 Cloud graphs use your Claude Code Anthropic login, or an API key set in the plugin's settings (`anthropicApiKey`, stored as a sensitive setting). The mod never archives or deletes your Managed Agents sessions, agents or files.
 
 ## Auto mode
 
-Use a **Headless** graph (toolbar button: Local → Headless → Cloud). Each card runs as its own `claude -p --permission-mode auto` process with the card's instructions, tools, model and budget, so auto mode judges every action against the card's own prompt. Card processes do not load agent-graph, do not reach your session, and are not saved to your resume list.
+Use a **Headless** graph (toolbar button: Local → Headless → Cloud). Each card runs as its own `claude -p --permission-mode auto` process with the card's instructions, tools, model and budget, so auto mode judges every action against the card's own prompt. Card processes do not load agent-graph, do not reach your session, and are not saved to your resume list. Because those prompts are the graph author's, auto mode is not a safety boundary against a graph you have not reviewed, and card processes inherit your environment variables.
 
 **Local** graphs do not work in auto mode: the mod starts each card's agent itself, auto mode's classifier cannot judge an agent start that no message asked for ("gave no verdict for Agent"), and plugins cannot approve their own agent starts. Run Local graphs in another permission mode (for example Accept edits).
 

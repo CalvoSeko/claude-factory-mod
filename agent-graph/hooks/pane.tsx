@@ -2,18 +2,19 @@ import type { Elements, EngineInterface, RenderElement } from 'claude-code'
 
 import type { ActivityItem, AgentNode, BackendKind, EdgeKind, Graph, RestartWait, RunSummary, RunView, TestCase } from '../types'
 import {
-  acceptLatest, addAgent, addCheck, cachedInstructions, cachedLastRun, cachedRunIndex, cachedSkills, cachedTests, cancelConnect, compareTest, confirmEdge, continueAgent, continueAll,
+  acceptLatest, addAgent, addCheck, cachedInstructions, cachedLastRun, cachedRunIndex, cachedSkills, cachedTests, cancelConnect, cancelTrust, compareTest, confirmEdge, continueAgent, continueAll,
   deleteGraph, deleteSelected, deleteTest, describeGraph, editInstructions, editLastInput, editMustHold, editPausedInput, hasInputReady, insertResult, isBusy, latestRun,
   loadInstructions, loadLastRun, loadRunIndex, loadTests, minutes, newGraph, openGraph, openRun, patchNode, pausedPrompt, removeEdge, renameGraph, retypeEdge, runAllTests,
   runFromNode, runFromPane, runTest, runWithInput, saveAsTest, saveOutputs, saveTranscript, selectNode, setBackend, setCheckCommand, setCheckTimeout, setMustHold, setRetries,
   setRunCap, setTask, startConnect, stepRun, stopRun,
-  toggleAllCalls, toggleAllRuns, toggleCall, toggleInputMore, toggleLastRunMore, togglePane, toggleTimeline, useRunTask, type Host, type LastRun,
+  toggleAllCalls, toggleAllRuns, toggleCall, toggleInputMore, toggleLastRunMore, togglePane, toggleTimeline, trustAndRun, useRunTask, type Host, type LastRun,
 } from './actions'
 import { ANTHROPIC_SKILLS } from './cloud/sync'
 import { cardsOf, clockTime, drawEdges, edgesOf, GLYPH, ROW_RATIO, SVG_LIMIT, timelineOf, timelineSpan, VEC_UNIT, vectorBaseSvg, vectorGlowSvg, type CanvasProps, type EdgeView, type TimelineCell } from './grid'
 import { capText, isCap, runSpend, usdText } from './cost'
 import { staleOf } from './records'
 import { resetTimeOf, restartWords } from './transient'
+import { isTrusted, trustLines } from './trust'
 import { ALL_DISABLED, connect, DEFAULT_RETRIES, isCheck, MODEL_CHOICES, NO_AGENTS, nextKind, NODE_H, NODE_W, nodeById, outgoing, problemsFor, TOOL_CHOICES, validate, warningsOf, withoutDisabled, type Problem } from './model'
 
 // What `host.ui.resolve(e)` answers for the band; register.tsx resolves it (the
@@ -579,6 +580,18 @@ export async function drawPane(host: Host, parts: PaneParts, props: PaneProps): 
           {warnings.map((p, i) => (
             <Button key={`warning-${i}`} plain label={`△ ${labelOf(p)}`} onPress={() => selectNode(host, ownerOf(p))} />
           ))}
+        </Box>
+      ) : null}
+      {/* Run on an imported graph: what it can do, every line in full (wrapped, never clipped), before it may run. */}
+      {ui.approving === g.id && !isTrusted(g) ? (
+        <Box key="trust-view" flexDirection="column">
+          <Text bold color={ORANGE}>Review this imported graph before it runs</Text>
+          <Text dimColor>It can run these commands, read these files and spend up to these limits.</Text>
+          {trustLines(g).map((line, i) => <Text key={`trust-line-${i}`} wrap="wrap">{line}</Text>)}
+          <Box flexDirection="row" columnGap={1}>
+            <Button key="trust-run" variant="primary" label="Trust and run" onPress={() => trustAndRun(host)} />
+            <Button key="trust-cancel" label="Cancel" onPress={() => cancelTrust(host)} />
+          </Box>
         </Box>
       ) : null}
       {hint !== null ? <Text color="#d97757">{hint}</Text> : null}

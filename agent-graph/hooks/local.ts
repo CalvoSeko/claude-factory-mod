@@ -1,6 +1,6 @@
 import type { AgentNode, Graph, OutputFile } from '../types'
 import type { Tracker } from './activity'
-import type { Meter } from './cost'
+import { budgetOf, type Meter } from './cost'
 import {
   agentType, contextSize, firstLine, gatherContext, LOCAL_CONTEXT_LIMIT, localPrompt, localSpec, systemText, VERDICT_SECTION,
   type ContextSource, type LocalAgentSpec,
@@ -283,8 +283,9 @@ export function createLocalBackend(graph: Graph, deps: LocalDeps): Backend {
       let stopCall: Promise<void> | undefined
       const stopNow = () => (stopCall ??= Promise.resolve().then(() => deps.stopAgent(agentId)))
       // The budget: once the agent's cost (its delegates' included) reaches it, the agent is stopped and ends failed.
+      const budget = budgetOf(node)
       let isOverBudget = false
-      const over: NodeOutcome = { ok: false, reason: `Hit its $${node.budgetUsd} budget.` }
+      const over: NodeOutcome = { ok: false, reason: `Hit its $${budget} budget.` }
       let settleBudget!: (outcome: NodeOutcome) => void
       const budgetEnded = new Promise<NodeOutcome>(resolve => (settleBudget = resolve))
       const meter = deps.meter?.()
@@ -297,7 +298,7 @@ export function createLocalBackend(graph: Graph, deps: LocalDeps): Backend {
             // Nothing to do about it here.
           }
           // A stop the person already asked for keeps its own ending (cancelled, "Stopped.").
-          if (isOverBudget || stopCall !== undefined || !Number.isFinite(node.budgetUsd) || node.budgetUsd <= 0 || total < node.budgetUsd) return
+          if (isOverBudget || stopCall !== undefined || total < budget) return
           isOverBudget = true
           // Like a person's Stop: it starts nothing more, and stays guarded and counted until its turn really ends.
           if (!isEnded) deps.guard.stop(agentId)

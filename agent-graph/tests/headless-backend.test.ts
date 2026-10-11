@@ -141,12 +141,12 @@ test('the executable is CLAUDE_CODE_EXECPATH when the session has it, else claud
   }
 })
 
-test('no budget flag without a positive finite budget', async () => {
-  for (const budgetUsd of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
+test('a missing or bad budget runs with the default budget', async () => {
+  for (const budgetUsd of [undefined as never, 0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
     const g = graph([node('a', 'Lead', { budgetUsd })])
     const { deps, spawned } = setup([scripted([out(result())])])
     await (await run(g, deps)).outcome()
-    expect(spawned[0]!.argv.includes('--max-budget-usd')).toBe(false)
+    expect(spawned[0]!.argv.slice(-2)).toEqual(['--max-budget-usd', '2'])
   }
 })
 

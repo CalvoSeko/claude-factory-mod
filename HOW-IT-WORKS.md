@@ -78,3 +78,84 @@ A graph can run on **Local**, **Headless** or **Cloud**. The toolbar button cycl
 - The card's budget stops it. If it reaches its budget, the card fails with "Hit its $X budget."
 - Check cards run as on Local.
 - Stop asks the card's process to end. It may finish the step it is on first. Automatic retries after temporary failures work the same as on Local and Cloud.
+
+## Claude can read and edit graphs
+
+Claude has two tools for your agent graphs, `read_graph` and `edit_graph`. A graph is named by its id or its exact name; it need not be open. When the edited graph is the open one, the pane redraws.
+
+**The two tools**
+
+- Only your main conversation can use them. A delegate (helper) is refused.
+- Both refuse an untrusted graph. Review it in the pane first.
+- `read_graph` shows the graph as text. It does not read an instructions file from outside the graph's own folder.
+- `edit_graph` takes one batch of changes: add, change or remove cards and arrows, set a card's instructions, and set the graph's name, description, backend and run cap.
+- A batch is one undo step in the pane.
+- A value that is not allowed is refused, not clamped. If one change in a batch is refused, the whole batch is refused.
+- Edits are refused while the graph runs.
+
+**Who approves an edit**
+
+- A deny rule for `mcp__agent-graph__edit_graph` refuses the edit.
+- With an allow rule, the batch applies with no dialog. The exception: a batch that adds a check card, or changes a check card's command, always asks.
+- With no rule, it asks. The dialog shows every change in full. Apply applies it. Cancel, closing the dialog, or a `-p` run without the allow rule changes nothing.
+
+**What applies with no dialog under the allow rule**
+
+- Instructions, tools (an empty list means all tools) and models.
+- Context files. On Cloud, those files are uploaded.
+- Budgets up to $100 for a card and a run cap up to $500.
+- The backend, arrows and names.
+- Turning cards on and off. This includes turning a disabled check card back on, joining an arrow to a check, or switching a graph back to Local. Each puts an existing check command back to work.
+
+Only a new check card or a changed check command always asks.
+
+**Permission modes**
+
+- With `bypassPermissions`, every change except check-card changes applies silently.
+- In auto mode, the mod shows its own dialog. It may do the same with `dontAsk`.
+
+**To allow edits**
+
+Add the tool to `permissions` in `~/.claude/settings.json`:
+
+```json
+{ "permissions": { "allow": ["mcp__agent-graph__edit_graph"] } }
+```
+
+You can also add it with `/permissions`.
+
+## Shared graphs
+
+You can drop a graph file into `~/.claude/agent-graph/import/`. The mod imports it when a session starts or when you open `/agent-graph`. Treat a graph from someone else like a script from someone else.
+
+**What an imported graph can do**
+
+- Its check cards run commands on your computer.
+- Its agent cards read the files they name into their prompts. On Cloud, those files are uploaded.
+- It spends money, up to its limits: at most $100 for each card, at most $500 for the whole run, and at most 10 retries on an arrow. A value that is missing or too high is set back to a safe one. A missing run cap becomes $20.
+
+**It starts untrusted**
+
+- An imported graph has no tool for Claude, and a tool call for it is refused. Step, From here and tests are refused too.
+- ▶ Run opens an approval view instead of starting. It shows:
+  - the backend, the graph's description (Claude would read it as the tool's text) and the run cap;
+  - each check card's command;
+  - each agent card's tools, model, budget, context files, helpers and "when to use" text.
+- Text from the graph's author is shown in quotes, in full. A line break shows as `\n`.
+- **Trust and run** trusts the graph and runs it. **Cancel** keeps it untrusted.
+- Graphs that were in your library before this check count as trusted. Delete and import again any that came from outside.
+
+**What an import loses**
+
+- A card's instructions file path is set to `<home>/.claude/agent-graph/<graph id>/<card id>.md`. The old path is never read.
+- A shared graph therefore arrives with empty instructions, unless the sharer also sends those `.md` files and you put them at that path.
+- Once Claude has edited a card's instructions, the card no longer sits at `<graph id>/<card id>.md`. The new text is saved as a new file in the same folder, and older versions stay until the graph is deleted. So do not ship the `<graph id>/<card id>.md` files of an edited graph: they hold the old text, or none. Send the current text of each edited card, and tell the receiver to save it at `<graph id>/<card id>.md` (an import reads only that path). The graph file says which file a card uses now.
+- Cloud agent links in the file are dropped. The cards link to new Cloud agents the first time you run on Cloud.
+
+**Safety limits**
+
+- The mod writes and deletes only inside the graph's own folder. It refuses any other path and shows a message.
+- On Windows, the mod passes only paths made of ASCII letters, digits, space and `_ - . : / \` to `cmd`. If your home folder has other letters (for example `C:\Users\Müller`), the mod cannot delete instructions files, remove import files or open files in your editor. Each refusal shows a message.
+- When Claude runs a graph, the result comes back inside a frame that says it is data from the graph, not an instruction from you. The graph's output cannot close the frame.
+- Headless auto mode is not a safety boundary against a malicious graph. It judges each action against the card's prompt, and the graph's author wrote that prompt.
+- A Headless card's process inherits this session's environment, apart from six Claude Code variables that are blanked. The engine can only add variables, not remove them, so keys in your environment reach the card.

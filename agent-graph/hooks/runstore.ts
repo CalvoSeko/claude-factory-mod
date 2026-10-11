@@ -23,16 +23,16 @@ export function createRunStore(store: KeyValue, files: TextFiles, root: string) 
 
   async function write(record: RunRecord, g: Graph): Promise<void> {
     const before = await index(record.graphId)
-    await files.write(fileOf(record.graphId, record.id), JSON.stringify(record))
+    await files.write(record.graphId, fileOf(record.graphId, record.id), JSON.stringify(record))
     const saved = withRecord({ runs: before.runs, latest: onlyAgentsOf(before.latest, g) }, record)
     try {
       await store.set(indexKey(record.graphId), { runs: saved.index.runs, latest: onlyAgentsOf(saved.index.latest, g) })
     } catch (error) {
       // No index entry names the file: it would stay for good.
-      await files.remove(fileOf(record.graphId, record.id))
+      await files.remove(record.graphId, fileOf(record.graphId, record.id))
       throw error
     }
-    for (const id of saved.dropped) await files.remove(fileOf(record.graphId, id))
+    for (const id of saved.dropped) await files.remove(record.graphId, fileOf(record.graphId, id))
   }
 
   async function read(graphId: string, runId: string): Promise<RunRecord | undefined> {
@@ -53,7 +53,7 @@ export function createRunStore(store: KeyValue, files: TextFiles, root: string) 
       runs: before.runs.filter(s => s.id !== runId),
       latest: Object.fromEntries(Object.entries(before.latest).filter(([, l]) => l.runId !== runId)),
     })
-    await files.remove(fileOf(graphId, runId))
+    await files.remove(graphId, fileOf(graphId, runId))
   }
 
   // Forgets the graph's runs. The record files sit in the graph's own folder, which deleteGraph removes

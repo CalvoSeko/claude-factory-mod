@@ -4,10 +4,15 @@ export type ProblemTarget = { kind: 'graph' } | { kind: 'node'; id: string } | {
 export type Problem = { target: ProblemTarget; message: string }
 
 export const DEFAULT_BUDGET_USD = 2
+// The most an imported graph keeps: a card's budget and the run cap. An import without a valid cap gets the default.
+export const MAX_BUDGET_USD = 100
+export const MAX_RUN_CAP_USD = 500
+export const DEFAULT_RUN_CAP_USD = 20
 export const DEFAULT_RETRIES = 3
 export const MAX_RETRIES = 10
 export const DEFAULT_CHECK_TIMEOUT_MIN = 10
 export const MAX_CHECK_TIMEOUT_MIN = 60
+export const MAX_XY = 1000
 // The colour of retry arrows.
 export const RETRY_COLOR = '#d97757'
 export const MAX_CLOUD_DELEGATES = 20
@@ -60,7 +65,13 @@ export function emptyGraph(name: string): Graph {
   return { id: newId('g'), name, description: '', backend: 'local', nodes: [], edges: [], layout: LAYOUT }
 }
 
-export const nodeById = (g: Graph, id: string): AgentNode | undefined => g.nodes.find(n => n.id === id)
+// A new check card with no command yet.
+export const checkNode = (name: string, x: number, y: number): AgentNode => ({
+  id: newId('n'), name, x, y, instructionsFile: '', check: { command: '', timeoutMin: DEFAULT_CHECK_TIMEOUT_MIN },
+  skills: [], contextFiles: [], tools: [], model: null, budgetUsd: DEFAULT_BUDGET_USD,
+})
+
+export const nodeById =(g: Graph, id: string): AgentNode | undefined => g.nodes.find(n => n.id === id)
 
 // A check card runs a shell command instead of an agent.
 export const isCheck = (node: AgentNode | undefined): boolean => node?.check !== undefined

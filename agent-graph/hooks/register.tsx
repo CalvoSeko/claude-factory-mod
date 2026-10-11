@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import {
-  activityRun, completions, guard, importGraphs, libraryOf, meterStep, onCanvas, paneClosed, refreshIndex, refreshSkills, registerGraphTools, settings, startRun, togglePane,
-  TOOL_PREFIX, toolName, trackSpawn, trackToolCall, trackTurnEnd, type Host,
+  activityRun, completions, editGraphTool, guard, importGraphs, libraryOf, meterStep, onCanvas, paneClosed, readGraphTool, refreshIndex, refreshSkills, registerEditorTools, registerGraphTools,
+  settings, startRun, togglePane, TOOL_PREFIX, toolName, trackSpawn, trackToolCall, trackTurnEnd, type Host,
 } from './actions'
 import type { CanvasPost } from './grid'
 import { bandButton, drawPane, type PaneParts } from './pane'
@@ -30,8 +30,11 @@ function hostOf($: EngineInterface): Host {
       list: path => $.fs.list(path),
     },
     process: { run: (argv, options) => $.process.run(argv, options), spawn: request => $.process.spawn(request) },
-    tool: { register: spec => $.tool.register(spec), call: input => $.tool.call(input as never) },
-    ui: { open: args => $.ui.open(args), close: args => $.ui.close(args), toast: (text, options) => $.ui.toast(text, options) },
+    tool: { register: spec => $.tool.register(spec), call: input => $.tool.call(input as never), check: input => $.tool.check(input) },
+    ui: {
+      open: args => $.ui.open(args), close: args => $.ui.close(args), toast: (text, options) => $.ui.toast(text, options),
+      ask: (question, options) => $.ui.ask(question, options),
+    },
     session: { authorize: () => $.session.authorize() },
     http: { fetch: (url, init) => $.http.fetch(url, init) },
     clock: { after: (ms, run) => $.clock.after(ms, run), now: () => $.clock.now() },
@@ -69,6 +72,7 @@ export const register: Register = (on, options) => {
       await refreshIndex(host)
       await registerGraphTools(host)
       await refreshSkills(host)
+      await registerEditorTools(host)
     } catch {
       // The pane and its tools come back on the next session start.
     }
@@ -143,6 +147,14 @@ export const register: Register = (on, options) => {
     const why = guard.check(e.agentId, e.subagent_type)
     return why === undefined ? next(e) : { deny: why }
   })
+
+  // Claude reads the graphs; the arguments are spread on the event.
+  on('tool.call', { tool: 'mcp__agent-graph__read_graph' }, async ($, e) =>
+    ({ result: await readGraphTool(hostOf($), { graph: e.graph }, { agentId: e.agentId }) }) as never)
+
+  // Claude edits a graph, with the person's approval unless a permission rule decides.
+  on('tool.call', { tool: 'mcp__agent-graph__edit_graph' }, async ($, e, next) =>
+    ({ result: await editGraphTool(hostOf($), { graph: e.graph, changes: e.changes }, { agentId: e.agentId, signal: next.signal }) }) as never)
 
   // A spawn under an agent of the run nests the child's calls under the parent's delegate call.
   on('agent.spawn', ($, e, next) => trackSpawn(activityRun(), e, () => next(e)))
