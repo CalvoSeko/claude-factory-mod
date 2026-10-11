@@ -23,6 +23,7 @@ Every card of a Software factory graph reads this file first; its rules win over
 
 ## Environment
 - On Windows, write multi-line files with the Write/Edit tools, never shell heredocs or echo.
+- Never start an interactive interpreter or REPL (`python`, `python -` with empty input, `node`) without a script or `-c`/`-e`: in the background it can loop on errors and fill the disk.
 - Several sessions may run tests at the same time; a timeout under load is not a failure of your change — re-run once before investigating.
 
 ## Writing
