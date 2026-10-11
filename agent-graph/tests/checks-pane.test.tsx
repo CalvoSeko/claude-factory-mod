@@ -127,16 +127,42 @@ async function untilEnded(before: number) {
 const recordsOf = (graphId: string): RunRecord[] =>
   [...files.keys()].filter(p => p.includes(`/${graphId}/runs/`) && p.endsWith('.json')).map(p => JSON.parse(files.get(p)!) as RunRecord).sort((x, y) => x.startedAt - y.startedAt)
 
-test('+ Check shows on Local graphs only', async ($, on) => {
+test('+ Check shows on Local and Headless graphs, not on Cloud', async ($, on) => {
   const pane = await openPane($, on, pair('g-btn'))
   expect(await pane.find({ key: 'add-check' })).toBeDefined()
   expect((await pane.find({ key: 'add-check' }))?.props.label).toBe('+ Check')
-  // The graph's other kind of backend has none (the button next to it switches).
+  // Headless runs checks too (the button next to it switches).
+  await pane.press({ key: 'backend' })
+  expect(stored('g-btn').backend).toBe('headless')
+  expect(await pane.find({ key: 'add-check' })).toBeDefined()
+  // Cloud has none.
   await pane.press({ key: 'backend' })
   expect(stored('g-btn').backend).toBe('cloud')
   expect(await pane.find({ key: 'add-check' })).toBeUndefined()
   await pane.press({ key: 'backend' })
   expect(await pane.find({ key: 'add-check' })).toBeDefined()
+  await pane.unmount()
+})
+
+test('the backend button cycles Local, Headless, Cloud and back', async ($, on) => {
+  const pane = await openPane($, on, pair('g-cycle'))
+  const label = async () => (await pane.find({ key: 'backend' }))?.props.label
+  expect(await label()).toBe('Local')
+  await pane.press({ key: 'backend' })
+  expect(await label()).toBe('Headless')
+  await pane.press({ key: 'backend' })
+  expect(await label()).toBe('Cloud')
+  await pane.press({ key: 'backend' })
+  expect(await label()).toBe('Local')
+  expect(stored('g-cycle').backend).toBe('local')
+  await pane.unmount()
+})
+
+test('+ Check adds a check card on a Headless graph', async ($, on) => {
+  const pane = await openPane($, on, pair('g-head', undefined, 'headless'))
+  expect((await pane.find({ key: 'backend' }))?.props.label).toBe('Headless')
+  await pane.press({ key: 'add-check' })
+  expect(stored('g-head').nodes[2]).toMatchObject({ name: 'Check 1', check: { command: '', timeoutMin: 10 } })
   await pane.unmount()
 })
 

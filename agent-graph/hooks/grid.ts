@@ -1,4 +1,4 @@
-import type { ActivityItem, AgentNode, Connecting, Edge, EdgeKind, Graph, NodeRunView, NodeStatus, RunView } from '../types'
+import type { ActivityItem, AgentNode, Connecting, Edge, EdgeKind, Graph, NodeRunView, NodeStatus, RestartWait, RunView } from '../types'
 import { DEFAULT_RETRIES, isCheck, loopContaining, NODE_H, NODE_W, nodeById, problemsFor, RETRY_COLOR, runStart, subgraphFrom, validate, withoutDisabled, type Problem } from './model'
 import type { StaleCause } from './records'
 
@@ -61,6 +61,10 @@ export type CardView = {
   // A card of a retry loop in round 2 or later: `round <r>/<retries + 1>`, already part of `line` (the canvas keeps its room
   // when it draws the running line itself).
   round?: string
+  // An agent waiting to be started again after a temporary failure: when it starts, and `retry <n>/<of>`; the canvas
+  // counts down to it itself (`retry 1/3 · in 1:30`).
+  restartAt?: number
+  restartLabel?: string
   // A check card: a command, not an agent (it has no instructions to edit).
   isCheck?: true
   // On a card of a retry loop other than its target, From here runs from the target: the target's name.
@@ -556,6 +560,15 @@ const mmss = (ms: number): string => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
+// The time left: m:ss, or h:mm:ss from an hour (rounded up, so it reads 0:00 only once the time has come).
+export const countdown = (ms: number): string => {
+  const s = Math.max(0, Math.ceil(ms / 1000))
+  const mm = `${Math.floor(s / 60) % 60}:${String(s % 60).padStart(2, '0')}`
+  return s < 3600 ? mm : `${Math.floor(s / 3600)}:${mm.padStart(5, '0')}`
+}
+
+const restartLabel = (w: RestartWait): string => `retry ${w.attempt}/${w.of}`
+
 // The newest call that is running now, going down into the delegate it is waiting for.
 function innermostRunning(items: ActivityItem[]): ActivityItem | undefined {
   for (let i = items.length - 1; i >= 0; i--) {
@@ -582,6 +595,10 @@ function lineOf(n: AgentNode, g: Graph, v: NodeRunView | undefined, now: number 
   }
   switch (v?.status) {
     case 'running': {
+      // Waiting to be started again: the countdown, without the round (it would not fit).
+      if (v.restartWait !== undefined) {
+        return { line: `${restartLabel(v.restartWait)} · in ${countdown(v.restartWait.until - (now ?? v.restartWait.until))}`, lineTone: 'plain' }
+      }
       if (v.current === undefined || v.current === '') return { line: withRound('', round), lineTone: 'plain' }
       // `<tool> · <summary> · m:ss` (and ` · round 2/3`); the time and the round keep their room and the rest is clipped.
       const tool = innermostRunning(v.activity ?? [])?.tool
@@ -663,6 +680,11 @@ export function cardsOf(g: Graph, o: CardOptions): CardView[] {
     }
     // A helper's line is its own (the canvas counts elapsed time up on a card that has a start).
     if (v?.startedAt !== undefined && v.calledBy === undefined) card.startedAt = v.startedAt
+    if (v?.restartWait !== undefined) {
+      card.glyph = '◷'
+      card.restartAt = v.restartWait.until
+      card.restartLabel = restartLabel(v.restartWait)
+    }
     if (v?.costUsd !== undefined) card.costUsd = v.costUsd
     if (v?.costUsd !== undefined && v.costEstimated === true) card.costEstimated = true
     return card

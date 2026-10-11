@@ -3,6 +3,7 @@ import { test } from './kit'
 import type { RenderElement } from 'claude-code'
 
 import { toolName } from '../hooks/actions'
+import { slimmed } from '../hooks/records'
 import type { AgentNode, Graph, RunIndex, RunRecord } from '../types'
 
 const node = (id: string, name: string, x: number): AgentNode => ({
@@ -42,9 +43,11 @@ const submitted: string[] = []
 let ends = 0
 
 // The Managed Agents API as the mocks answer it: one session per agent that runs, ended at once unless held.
-type Session = { id: string; name: string; prompt: string; isInterrupted: boolean }
+type Session = { id: string; name: string; prompt: string; isInterrupted: boolean; isOverloaded: boolean }
 let sessions: Session[] = []
 let holding = new Set<string>()
+// How many sessions of an agent (by name) end with an overload error before one answers.
+let overloads = new Map<string, number>()
 let environmentFails = false
 let agentsMade = 0
 // Tool calls a session makes before its answer, by agent name.
@@ -64,6 +67,12 @@ function cloud(url: string, method: string, body: string | undefined) {
       name: String(parsed.title).split(' / ')[1]!,
       prompt: String(parsed.initial_events[0].content[0].text),
       isInterrupted: false,
+      isOverloaded: false,
+    }
+    const left = overloads.get(session.name) ?? 0
+    if (left > 0) {
+      session.isOverloaded = true
+      overloads.set(session.name, left - 1)
     }
     sessions.push(session)
     return json({ id: session.id })
@@ -76,6 +85,7 @@ function cloud(url: string, method: string, body: string | undefined) {
       return json({})
     }
     if (session.isInterrupted) return json({ data: [{ id: '9', type: 'session.status_idle', stop_reason: { type: 'interrupted' } }] })
+    if (session.isOverloaded) return json({ data: [{ id: '1', type: 'session.error', error: { type: 'overloaded_error', message: 'Overloaded' } }] })
     if (holding.has(session.name)) return json({ data: [] })
     return json({ data: [
       ...(toolEvents.get(session.name) ?? []),
@@ -103,6 +113,7 @@ async function openPane($: Args[0], on: Args[1], g: Graph, options: { failWrites
   ends = 0
   sessions = []
   holding = new Set()
+  overloads = new Map()
   environmentFails = false
   agentsMade = 0
   toolEvents = new Map()
@@ -438,6 +449,75 @@ test('a record whose write fails is saved again without the call details, and no
   expect(record!.nodes['a']!.activity![0]!.input).toBeUndefined()
   expect(record!.nodes['a']!.activity![0]!.result).toBeUndefined()
   expect(JSON.stringify(kv.get('runs:g-slim'))).toContain(record!.id)
+  await pane.unmount()
+})
+
+// ---- automatic retries ----
+
+type Card = { id: string; glyph: string; line: string; restartAt?: number; restartLabel?: string }
+const cardOf = async (pane: Pane, id: string): Promise<Card | undefined> =>
+  (JSON.parse(JSON.stringify((await pane.find({ key: 'canvas' }))?.props)).props.cards as Card[]).find(c => c.id === id)
+
+// Starts a run whose first agent's first session fails with an overload, and moves the clock until it waits to retry.
+async function untilWaiting(pane: Pane) {
+  overloads.set('Alpha', 1)
+  await pane.input({ key: 'task', text: 'Write it', kind: 'change' })
+  await pane.press({ key: 'run' })
+  for (let i = 0; i < 300 && (await cardOf(pane, 'a'))?.restartAt === undefined; i++) {
+    await clock.advance(500)
+    await tick()
+  }
+  expect((await cardOf(pane, 'a'))?.restartAt).toBeDefined()
+}
+
+test('a session that fails for a temporary reason: the card counts down, the inspector says why, and the record lists the retry', async ($, on) => {
+  const pane = await openPane($, on, chain('g-retry'))
+  const before = ends
+  await untilWaiting(pane)
+  const card = (await cardOf(pane, 'a'))!
+  expect(card).toMatchObject({ glyph: '◷', restartLabel: 'retry 1/3' })
+  expect(card.line).toMatch(/^retry 1\/3 · in 0:(2\d|30)$/)
+  // The canvas counts down between publishes, and the ◷ does not turn.
+  const shown = async () => (await pane.find({ in: 'canvas', type: 'Text', text: /^retry 1\/3 · in 0:\d\d$/ }))?.text
+  const first = await shown()
+  expect(await pane.find({ in: 'canvas', type: 'Text', text: /◷ Alpha/ })).toBeDefined()
+  await pane.advance(2000)
+  expect(Number((await shown())!.slice(-2))).toBe(Number(first!.slice(-2)) - 2)
+  expect(await pane.find({ in: 'canvas', type: 'Text', text: /◷ Alpha/ })).toBeDefined()
+  // The inspector says why it waits and when it tries again.
+  await pane.post({ events: [{ kind: 'down', x: 5, y: 2 }] })
+  expect(await pane.find({ text: 'Waiting to retry (1 of 3)' })).toBeDefined()
+  expect(await pane.find({ text: 'API overloaded (529): Session error: Overloaded' })).toBeDefined()
+  expect(await pane.find({ text: /^Tries again at \d\d:\d\d\.$/ })).toBeDefined()
+  expect(await pane.find({ text: '■ Stop ends the wait.' })).toBeDefined()
+
+  await untilEnded(before)
+  expect(sessions.map(s => s.name)).toEqual(['Alpha', 'Alpha', 'Bravo', 'Charlie'])
+  const [record] = recordsOf('g-retry')
+  expect(record).toMatchObject({ ending: 'finished' })
+  expect(record!.nodes['a']).toMatchObject({ status: 'done', output: 'ALPHA-OUT' })
+  expect(record!.nodes['a']!.restarts).toEqual([{
+    attempt: 1, at: expect.any(Number), kind: 'overloaded', error: 'Session error: Overloaded', waitMs: 30_000,
+    link: 'https://platform.claude.com/workspaces/default/sessions/s1',
+  }])
+  expect(slimmed(record!, 10).nodes['a']!.restarts).toEqual(record!.nodes['a']!.restarts)
+  // Once it is over the inspector lists the retry; the wait is gone.
+  expect(await pane.find({ text: /^Retried automatically: \d\d:\d\d API overloaded \(529\)$/ })).toBeDefined()
+  expect(await pane.find({ text: 'Waiting to retry (1 of 3)' })).toBeUndefined()
+  await pane.unmount()
+})
+
+test('Stop during the wait ends the run at once: the agent is cancelled and its retry marked stopped', async ($, on) => {
+  const pane = await openPane($, on, chain('g-retry-stop'))
+  const before = ends
+  await untilWaiting(pane)
+  await pane.press({ key: 'stop' })
+  await untilEnded(before)
+  expect(sessions.map(s => s.name)).toEqual(['Alpha'])
+  const [record] = recordsOf('g-retry-stop')
+  expect(record).toMatchObject({ ending: 'stopped' })
+  expect(record!.nodes['a']).toMatchObject({ status: 'cancelled', error: 'Stopped.' })
+  expect(record!.nodes['a']!.restarts).toMatchObject([{ attempt: 1, stopped: true }])
   await pane.unmount()
 })
 

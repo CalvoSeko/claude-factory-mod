@@ -878,6 +878,9 @@ test('a check card shows its command on its second line, dim when it has none', 
   expect(d!.line).toBe('$ echo one')
   // An agent keeps its summary.
   expect(cardsOf(g0, options)[0]!.line).toBe('inherit · 0 skills')
+  // Headless inherits the model like Local; only Cloud has its own default.
+  expect(cardsOf({ ...g0, backend: 'headless' }, options)[0]!.line).toBe('inherit · 0 skills')
+  expect(cardsOf({ ...g0, backend: 'cloud' }, options)[0]!.line).toBe('default · 0 skills')
 })
 
 test('a check card reads passed when done, and its failure when it failed', async () => {
@@ -922,6 +925,28 @@ test('a loop card from round 2 on says round <r>/<retries + 1> after its status,
   for (const v of [{ status: 'waiting' }, { status: 'skipped' }, { status: 'cancelled', error: 'Stopped by you at the third try' }] as const) {
     expect(Array.from(fits({ ...v, round: 10 }).line).length).toBeLessThanOrEqual(22)
   }
+})
+
+test('an agent waiting to retry counts down on its card with ◷, within the 22 cells and without the round', async () => {
+  const now = 1_000_000
+  const waiting = (until: number, extra: Partial<NodeRunView> = {}): NodeRunView => ({
+    status: 'running', startedAt: 0, current: 'Read a.ts', restartWait: { attempt: 1, of: 3, until, kind: 'rate-limit', error: 'API Error: 429' }, ...extra,
+  })
+  const run = (a: NodeRunView): RunView => ({ graphId: 'g', graphName: 'G', isRunning: true, nodes: { a } })
+  const a = cardsOf(g0, { ...options, now, run: run(waiting(now + 90_000)) })[0]!
+  expect(a).toMatchObject({ line: 'retry 1/3 · in 1:30', glyph: '◷', tone: 'running', restartAt: now + 90_000, restartLabel: 'retry 1/3' })
+  expect(a.live).toBeUndefined()
+  // A part of a second left still reads as that second; the hours show from an hour on.
+  expect(cardsOf(g0, { ...options, now, run: run(waiting(now + 500)) })[0]!.line).toBe('retry 1/3 · in 0:01')
+  expect(cardsOf(g0, { ...options, now, run: run(waiting(now + 3_600_000)) })[0]!.line).toBe('retry 1/3 · in 1:00:00')
+  // The longest wait, on a loop card in round 2: the round gives way.
+  const longest = cardsOf(loopG(), { ...options, now, run: run(waiting(now + 6 * 3_600_000, { round: 2 })) })[0]!
+  expect(longest.line).toBe('retry 1/3 · in 6:00:00')
+  expect(Array.from(longest.line).length).toBeLessThanOrEqual(22)
+  // Once it runs again the card is as any running card.
+  const again = cardsOf(g0, { ...options, now, run: run({ status: 'running', startedAt: 0 }) })[0]!
+  expect(again.glyph).toBe('◐')
+  expect(again.restartAt).toBeUndefined()
 })
 
 test('From here on a loop card other than the target starts from the target', async () => {

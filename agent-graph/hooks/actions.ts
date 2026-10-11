@@ -9,6 +9,7 @@ import { agentType, safeFileName, sha256Hex, type ContextSource } from './compil
 import type { CanvasEvent } from './grid'
 import { hitTest } from './grid'
 import { createGuard } from './guard'
+import { createHeadlessBackend } from './headless'
 import { asGraph, createLibrary, INSTRUCTIONS_TEMPLATE, type KeyValue, type Library, type TextFiles } from './library'
 import { createCompletions, createLocalBackend, localKey } from './local'
 import {
@@ -28,7 +29,7 @@ type Api = EngineInterface
 // closures over `$` (hostOf) and every action here takes it as `host`. It has
 // the shape of the part of `$` the actions use.
 export type Host = {
-  env: { get: (name: 'USERPROFILE' | 'HOME' | 'OS') => Promise<string | undefined> }
+  env: { get: (name: 'USERPROFILE' | 'HOME' | 'OS' | 'CLAUDE_CODE_EXECPATH') => Promise<string | undefined> }
   store: { get: Api['store']['get']; set: Api['store']['set']; delete: Api['store']['delete'] }
   fs: { exists: Api['fs']['exists']; read: (path: string) => Promise<string>; write: (path: string, text: string) => Promise<void>; list: Api['fs']['list'] }
   process: { run: Api['process']['run']; spawn: Api['process']['spawn'] }
@@ -829,11 +830,11 @@ export const addAgent = (host: Host): Promise<void> =>
     await host.update('ui', ui => ({ ...ui, selected: next.nodes[next.nodes.length - 1]!.id }))
   })
 
-// A new check card (named "Check N") with no command yet, at the first free spot and selected. Checks run on Local only.
+// A new check card (named "Check N") with no command yet, at the first free spot and selected. Checks run on Local and Headless (not Cloud).
 export const addCheck = (host: Host): Promise<void> =>
   exclusive(async () => {
     const g = await current(host)
-    if (g === null || g.backend !== 'local') return
+    if (g === null || g.backend === 'cloud') return
     const taken = new Set(g.nodes.map(n => n.name.trim().toLowerCase()))
     let n = 1
     while (taken.has(`check ${n}`)) n++
@@ -990,8 +991,8 @@ export async function setTask(host: Host, task: string): Promise<void> {
 
 async function backendFor(host: Host, graph: Graph): Promise<Backend | string> {
   const library = await libraryOf(host)
-  if (graph.backend === 'local') {
-    return createLocalBackend(graph, {
+  if (graph.backend !== 'cloud') {
+    const local = createLocalBackend(graph, {
       register: spec => host.agent.register(spec),
       spawn: args => host.agent.spawn(args),
       stopAgent: async agentId => {
@@ -1004,6 +1005,18 @@ async function backendFor(host: Host, graph: Graph): Promise<Backend | string> {
       tracker: () => activeRun?.tracker,
       meter: () => activeRun?.meter,
       command: { spawn: (argv, env) => host.process.spawn({ argv, ...(env !== undefined ? { env } : {}) }), isWindows: () => isWindows(host), wait: waitOf(host) },
+    })
+    if (graph.backend === 'local') return local
+    // Headless: each agent card is its own claude -p process; check cards run on Local's check code.
+    return createHeadlessBackend(graph, {
+      home: () => homeDir(host),
+      write: (path, text) => host.fs.write(path, text),
+      spawn: (argv, input, env) => host.process.spawn({ argv, input, env }),
+      instructions: node => library.instructions(node),
+      context: contextOf(host),
+      checks: local,
+      tracker: () => activeRun?.tracker,
+      execPath: () => host.env.get('CLAUDE_CODE_EXECPATH'),
     })
   }
   const credential = await credentialOf(host)
@@ -1842,6 +1855,7 @@ export function viewOf(r: RunRecord, runId: string, isHistoric: boolean): RunVie
           ...(n.calledBy !== undefined ? { calledBy: n.calledBy } : {}),
           ...(n.round !== undefined ? { round: n.round } : {}),
           ...(n.rounds !== undefined ? { rounds: n.rounds } : {}),
+          ...(n.restarts !== undefined ? { restarts: n.restarts } : {}),
         },
       ]),
     ),

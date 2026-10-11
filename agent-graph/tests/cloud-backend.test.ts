@@ -1,8 +1,8 @@
 import { expect } from 'claude-code/testing'
 import { test } from './kit'
 
-import type { AgentNode, Graph } from '../types'
-import type { Api, SessionEvent } from '../hooks/cloud/api'
+import type { AgentNode, Graph, RunView } from '../types'
+import { ApiError, type Api, type SessionEvent } from '../hooks/cloud/api'
 import { createTracker } from '../hooks/activity'
 import { createCloudBackend, type CloudDeps } from '../hooks/cloud/backend'
 import { handoffDir } from '../hooks/model'
@@ -129,7 +129,9 @@ test('a poll that throws twice then succeeds still finishes ok', async () => {
 test('a poll that always throws ends failed after backing off and asks the session to stop', async () => {
   const h = harness(Array.from({ length: 10 }, () => new Error('502 Bad Gateway')))
   const run = await createCloudBackend(graph(), h.deps).start(node(), 'x', [], () => {})
-  expect(await run.done).toEqual({ ok: false, reason: 'Lost contact with the cloud session (502 Bad Gateway); it was asked to stop.' })
+  const reason = 'Lost contact with the cloud session (502 Bad Gateway); it was asked to stop.'
+  // The session has its stop request, so the node may be started again.
+  expect(await run.done).toEqual({ ok: false, reason, transient: { kind: 'network', text: reason } })
   expect(h.waits).toEqual([2000, 2000, 4000, 8000, 16000])
   expect(h.sent).toEqual([{ type: 'user.interrupt' }])
 })
@@ -257,6 +259,72 @@ test('after a stop whose interrupts both fail, the poll ends as Stopped within a
   await run.stop()
   expect(h.sent).toEqual([])
   expect(await run.done).toEqual({ ok: false, reason: 'Stopped (the session may still be running; open its Console link).' })
+})
+
+// ---- temporary failures ----
+
+test('a session error of an overload is temporary; one of a bad request is not', async () => {
+  const busy = harness([[{ id: '1', type: 'session.error', error: { type: 'overloaded_error', message: 'Overloaded' } }]])
+  const a = await createCloudBackend(graph(), busy.deps).start(node(), 'x', [], () => {})
+  expect(await a.done).toEqual({ ok: false, reason: 'Session error: Overloaded', transient: { kind: 'overloaded', text: 'overloaded_error: Overloaded' } })
+  const bad = harness([[{ id: '1', type: 'session.error', error: { type: 'invalid_request_error', message: 'bad tool' } }]])
+  const b = await createCloudBackend(graph(), bad.deps).start(node(), 'x', [], () => {})
+  expect(await b.done).toEqual({ ok: false, reason: 'Session error: bad tool' })
+})
+
+test('a session that cannot be created for a 529 or the network fails temporarily; a 400 still throws', async () => {
+  const overloaded = harness([])
+  overloaded.deps.api.createSession = async () => { throw new ApiError(529, 'overloaded_error', 'Overloaded') }
+  const a = await createCloudBackend(graph(), overloaded.deps).start(node(), 'x', [], () => {})
+  expect(await a.done).toEqual({
+    ok: false,
+    reason: 'Could not start the cloud session: overloaded_error (529): Overloaded',
+    transient: { kind: 'overloaded', text: 'overloaded_error (529): Overloaded' },
+  })
+  expect(a.link).toBeUndefined()
+  const offline = harness([])
+  offline.deps.api.uploadFile = async () => { throw new Error('getaddrinfo ENOTFOUND api.anthropic.com') }
+  const g = graph(node({ contextFiles: ['spec.md'] }))
+  const b = await createCloudBackend(g, offline.deps).start(g.nodes[0]!, 'x', [], () => {})
+  expect(await b.done).toMatchObject({ ok: false, transient: { kind: 'network' } })
+  const invalid = harness([])
+  invalid.deps.api.createSession = async () => { throw new ApiError(400, 'invalid_request_error', 'no such agent') }
+  let thrown: unknown
+  await createCloudBackend(graph(), invalid.deps).start(node(), 'x', [], () => {}).catch(error => (thrown = error))
+  expect(thrown).toBeInstanceOf(ApiError)
+})
+
+test('lost contact is temporary only when the session received its stop request', async () => {
+  const lost = () => Array.from({ length: 10 }, () => new Error('fetch failed'))
+  const confirmed = harness(lost())
+  const a = await createCloudBackend(graph(), confirmed.deps).start(node(), 'x', [], () => {})
+  expect(await a.done).toMatchObject({ ok: false, transient: { kind: 'network' } })
+  // Both tries of the stop request fail: the old session may still be running, so it is not started again.
+  const unconfirmed = harness(lost(), {}, { sends: 2 })
+  const b = await createCloudBackend(graph(), unconfirmed.deps).start(node(), 'x', [], () => {})
+  expect(await b.done).toEqual({ ok: false, reason: 'Lost contact with the cloud session (fetch failed); it was asked to stop.' })
+})
+
+test('a run starts a fresh session after a temporary session error; the first keeps its link and nothing is archived or deleted', async () => {
+  const h = harness([[{ id: '1', type: 'session.error', error: { type: 'overloaded_error', message: 'Overloaded' } }], [said('2', 'Answer'), idle('3', 'end_turn')]])
+  let created = 0
+  h.deps.api.createSession = async body => { h.sessions.push(body); return { id: `sesn_${++created}` } }
+  const calls: string[] = []
+  h.deps.api = new Proxy(h.deps.api, { get: (target, key) => (calls.push(String(key)), Reflect.get(target, key)) })
+  const runWaits: number[] = []
+  const views: RunView[] = []
+  const g = graph()
+  const result = await runGraph(g, 'Go', createCloudBackend(g, h.deps), { onUpdate: v => void views.push(v), wait: async ms => void runWaits.push(ms), now: () => 5 })
+  expect('outputs' in result && result.outputs).toEqual({ a: 'Answer' })
+  expect(h.sessions).toHaveLength(2)
+  expect(runWaits).toEqual([30_000])
+  const a = views.at(-1)!.nodes['a']!
+  expect(a.status).toBe('done')
+  expect(a.link).toBe('https://platform.claude.com/workspaces/default/sessions/sesn_2')
+  expect(a.restarts).toEqual([{
+    attempt: 1, at: 5, kind: 'overloaded', error: 'Session error: Overloaded', waitMs: 30_000, link: 'https://platform.claude.com/workspaces/default/sessions/sesn_1',
+  }])
+  expect(calls.filter(name => /archive|delete/i.test(name))).toEqual([])
 })
 
 // ---- activity ----

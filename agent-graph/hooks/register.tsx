@@ -21,7 +21,7 @@ const runSlot = atom({ plugin: 'agent-graph', key: 'run' } as const, null as Slo
 function hostOf($: EngineInterface): Host {
   return {
     // $.env.get wants a literal name, so each variable the actions read is spelled out.
-    env: { get: name => (name === 'USERPROFILE' ? $.env.get('USERPROFILE') : name === 'HOME' ? $.env.get('HOME') : $.env.get('OS')) },
+    env: { get: name => (name === 'USERPROFILE' ? $.env.get('USERPROFILE') : name === 'HOME' ? $.env.get('HOME') : name === 'OS' ? $.env.get('OS') : $.env.get('CLAUDE_CODE_EXECPATH')) },
     store: { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value), delete: key => $.store.delete(key) },
     fs: {
       exists: path => $.fs.exists(path),
@@ -152,6 +152,12 @@ export const register: Register = (on, options) => {
     const r = yield* next(e)
     meterStep(activityRun(), e.agentId, r)
     return r
+  })
+
+  // The kind of API error that ended a sub-agent's turn goes with its turn end (the main thread's has no agent id).
+  on('classic.StopFailure', ($, e, next) => {
+    if (e.agent_id !== undefined) completions.fail(e.agent_id, { error: e.error, ...(e.error_details !== undefined ? { details: e.error_details } : {}) })
+    return next(e)
   })
 
   on('turn.complete', ($, e, next) => {

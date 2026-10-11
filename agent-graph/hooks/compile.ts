@@ -45,16 +45,19 @@ export async function systemText(
     .map(e => nodeById(g, e.to))
     .filter((n): n is AgentNode => n !== undefined)
   let text = own
+  // Local and Headless agents delegate with the Agent tool: Local's by the plugin's agent type, Headless's by the
+  // plain names of their --agents file.
+  const byAgentTool = backend !== 'cloud'
   if (delegates.length > 0) {
     const lines = await Promise.all(
       delegates.map(async d => {
         const purpose = d.whenToUse?.trim() || firstLine(await instructions(d)) || 'no description'
-        return backend === 'local'
-          ? `- ${d.name} (subagent_type "${agentType(g, d)}"): ${purpose}`
+        return byAgentTool
+          ? `- ${d.name} (subagent_type "${backend === 'headless' ? agentName(g, d) : agentType(g, d)}"): ${purpose}`
           : `- ${d.name}: ${purpose}`
       }),
     )
-    const how = backend === 'local'
+    const how = byAgentTool
       ? 'Use the Agent tool with one of these agents and no other:'
       : 'Hand work to these agents by name:'
     text = `${own}\n\n## You may delegate to\n\n${how}\n${lines.join('\n')}`

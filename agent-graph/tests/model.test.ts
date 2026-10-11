@@ -321,6 +321,15 @@ test('check cards need a Local graph', async () => {
   const cloud = graph({ backend: 'cloud', nodes: [check('k'), node('a')] })
   expect(validate(cloud)).toEqual([{ target: { kind: 'node', id: 'k' }, message: 'Check cards need a Local graph.' }])
   expect(messages(graph({ nodes: [check('k'), node('a')] }))).toEqual([])
+  // Headless runs checks the way Local does.
+  expect(messages(graph({ backend: 'headless', nodes: [check('k'), node('a')] }))).toEqual([])
+})
+
+test("Cloud's delegate and tool limits do not apply to a Headless graph", async () => {
+  const chain = connect(connect(graph({ backend: 'headless' }), 'a', 'b', 'delegate'), 'b', 'c', 'delegate')
+  expect(validate(chain)).toEqual([])
+  const tools = graph({ backend: 'headless', nodes: [node('a', 'a', ['Read', 'PowerShell'])] })
+  expect(validate(tools)).toEqual([])
 })
 
 test("a check card can't delegate or be delegated to", async () => {

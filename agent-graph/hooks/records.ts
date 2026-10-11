@@ -247,6 +247,7 @@ export function recordOf(
       ...(v.calledBy !== undefined ? { calledBy: v.calledBy } : {}),
       ...(v.round !== undefined ? { round: v.round } : {}),
       ...(v.rounds !== undefined ? { rounds: v.rounds } : {}),
+      ...(v.restarts !== undefined ? { restarts: v.restarts } : {}),
       // A helper's calls are kept once, under its callers' delegate calls (helperActivity finds them again).
       ...(v.calledBy === undefined && v.activity !== undefined && v.activity.length > 0 ? { activity: v.activity } : {}),
     }

@@ -117,7 +117,7 @@ export function asGraph(value: unknown): Graph | string {
   if (!isRecord(value)) return 'not a graph object.'
   if (typeof value['id'] !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value['id'])) return 'its id is missing or has characters other than letters, digits, _ and -.'
   if (typeof value['name'] !== 'string') return 'its name is missing.'
-  if (value['backend'] !== 'local' && value['backend'] !== 'cloud') return 'its backend must be "local" or "cloud".'
+  if (value['backend'] !== 'local' && value['backend'] !== 'headless' && value['backend'] !== 'cloud') return 'its backend must be "local", "headless" or "cloud".'
   const nodes = value['nodes']
   const edges = value['edges']
   if (!Array.isArray(nodes) || !Array.isArray(edges)) return 'it needs nodes and edges lists.'

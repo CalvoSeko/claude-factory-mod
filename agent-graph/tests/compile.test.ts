@@ -41,6 +41,14 @@ test('system text lists delegates with their first line', async () => {
   expect(await systemText(g, g.nodes[1]!, instructions, 'local')).toBe('# Reads sources\nCarefully.')
 })
 
+test('headless system text uses the Agent tool wording with the plain agent names of its --agents file', async () => {
+  const g = connect(base, 'a', 'b', 'delegate')
+  const headless = await systemText(g, g.nodes[0]!, instructions, 'headless')
+  expect(headless).toContain('Use the Agent tool with one of these agents and no other:')
+  expect(headless).toContain('- Reader (subagent_type "research-flow--reader-b"): Reads sources')
+  expect(headless).not.toContain('agent-graph:')
+})
+
 test('context gathering reads files and one level of folders, and reports missing paths', async () => {
   const fs: Record<string, string> = { 'spec.md': 'S', 'docs/a.md': 'A', 'docs/b.md': 'B' }
   const source: ContextSource = {

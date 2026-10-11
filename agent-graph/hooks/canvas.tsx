@@ -54,6 +54,12 @@ const clock = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
+// The time left, as grid.ts writes it (this module imports only types): m:ss, or h:mm:ss from an hour.
+const countdown = (ms: number) => {
+  const s = Math.max(0, Math.ceil(ms / 1000))
+  const mm = `${Math.floor(s / 60) % 60}:${String(s % 60).padStart(2, '0')}`
+  return s < 3600 ? mm : `${Math.floor(s / 3600)}:${mm.padStart(5, '0')}`
+}
 
 type Rect = { x: number; y: number; w: number; h: number }
 const inside = (r: Rect, x: number, y: number) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
@@ -297,12 +303,16 @@ const Canvas: ClientModule<CanvasProps, State> = (props, surface) => {
 
   const inner = p.cardW - 4
   const card = (c: CardView) => {
-    const glyph = c.tone === 'running' ? SPIN[ticks % SPIN.length]! : c.glyph
-    const elapsed = c.tone === 'running' && c.startedAt !== undefined ? clock(p.drawnAt - c.startedAt + (base === p.drawnAt ? ticks * 250 : 0)) : undefined
+    const since = p.drawnAt + (base === p.drawnAt ? ticks * 250 : 0)
+    // An agent waiting to be started again counts down to it, and its ◷ stands still.
+    const left = c.restartAt === undefined ? undefined : countdown(c.restartAt - since)
+    const glyph = c.tone === 'running' && left === undefined ? SPIN[ticks % SPIN.length]! : c.glyph
+    const elapsed = c.tone === 'running' && left === undefined && c.startedAt !== undefined ? clock(since - c.startedAt) : undefined
     // A running agent's current call keeps its time counting; the call's text gives way to it, and to the round of a loop card.
     const tail = elapsed === undefined ? '' : ` · ${elapsed}`
     const more = c.round === undefined ? '' : ` · ${c.round}`
-    const line = elapsed === undefined ? c.line
+    const line = left !== undefined ? `${c.restartLabel ?? 'retry'} · in ${left}`
+      : elapsed === undefined ? c.line
       : c.live !== undefined ? clip(c.live, Math.max(1, inner - tail.length - more.length)) + tail + more
       : roundedLine(`${elapsed}${c.round === undefined ? ' elapsed' : ''}${c.costUsd !== undefined ? ` · ${c.costEstimated === true ? '≈' : ''}$${c.costUsd.toFixed(2)}` : ''}`, c.round, inner)
     // A warning's △ is orange on its own; the name keeps its colour.

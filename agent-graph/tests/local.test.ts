@@ -9,6 +9,10 @@ import { createTracker } from '../hooks/activity'
 import { connect } from '../hooks/model'
 import { createMeter, type Usage } from '../hooks/cost'
 import { runGraph } from '../hooks/runner'
+import { completions } from '../hooks/actions'
+import { register } from '../hooks/register'
+
+declare const setTimeout: (run: () => void, ms?: number) => unknown
 
 const node = (id: string, name: string, contextFiles: string[] = []): AgentNode => ({
   id, name, x: 0, y: 0, instructionsFile: `${id}.md`, skills: [], contextFiles, tools: [], model: null, budgetUsd: 2,
@@ -175,6 +179,82 @@ test('waits that never get a turn end are capped, the oldest ending as an error'
   completions.complete({ agentId: 'run-1', answer: 'A', reason: 'answer' })
   completions.complete({ agentId: 'run-0', answer: 'late', reason: 'answer' })
   expect(await completions.wait('run-0')).toEqual({ agentId: 'run-0', answer: 'late', reason: 'answer' })
+})
+
+// ---- temporary failures ----
+
+test('a reported API error goes with the agent\'s error turn end, and is used up by its turn end', async () => {
+  const completions = createCompletions()
+  completions.fail('a1', { error: 'rate_limit', details: 'slow down' })
+  completions.complete({ agentId: 'a1', answer: '', reason: 'error' })
+  expect(await completions.wait('a1')).toEqual({ agentId: 'a1', answer: '', reason: 'error', failure: { error: 'rate_limit', details: 'slow down' } })
+  completions.complete({ agentId: 'a1', answer: '', reason: 'error' })
+  expect((await completions.wait('a1')).failure).toBeUndefined()
+  // An end that is not an error drops it too.
+  completions.fail('a2', { error: 'overloaded' })
+  completions.complete({ agentId: 'a2', answer: 'ok', reason: 'answer' })
+  expect(await completions.wait('a2')).toEqual({ agentId: 'a2', answer: 'ok', reason: 'answer' })
+  completions.complete({ agentId: 'a2', answer: '', reason: 'error' })
+  expect((await completions.wait('a2')).failure).toBeUndefined()
+})
+
+test('an error turn end with an API error of a limit, an overload, a server or the network is temporary, and says why', async () => {
+  const end = (error: string, details?: string) =>
+    outcomeOf({ agentId: 'x', answer: '', reason: 'error', failure: { error, ...(details !== undefined ? { details } : {}) } })
+  expect(end('rate_limit', 'API Error: 429 rate_limit_error')).toEqual({
+    ok: false, reason: 'The agent stopped with an error: API Error: 429 rate_limit_error', transient: { kind: 'rate-limit', text: 'API Error: 429 rate_limit_error' },
+  })
+  expect(end('overloaded')).toEqual({ ok: false, reason: 'The agent stopped with an error: overloaded', transient: { kind: 'overloaded', text: 'overloaded' } })
+  expect(end('server_error')).toMatchObject({ transient: { kind: 'server' } })
+  expect(end('unknown', 'read ECONNRESET')).toMatchObject({ reason: 'The agent stopped with an error: read ECONNRESET', transient: { kind: 'network' } })
+  expect(end('invalid_request', 'prompt is too long')).toEqual({ ok: false, reason: 'The agent stopped with an error: prompt is too long' })
+  expect(end('authentication_failed', '429')).toEqual({ ok: false, reason: 'The agent stopped with an error: 429' })
+})
+
+test('without a reported kind, only an error end whose answer is the engine\'s API Error text is read', async () => {
+  expect(outcomeOf({ agentId: 'x', answer: 'API Error: 529 {"type":"overloaded_error"}', reason: 'error' })).toEqual({
+    ok: false, reason: 'The agent stopped with an error: API Error: 529 {"type":"overloaded_error"}', transient: { kind: 'overloaded', text: 'API Error: 529 {"type":"overloaded_error"}' },
+  })
+  expect(outcomeOf({ agentId: 'x', answer: 'The server returned 500 rows, ECONNRESET aside.', reason: 'error' })).toEqual({ ok: false, reason: 'The agent stopped with an error.' })
+  // An answer is never read as an error, whatever it says.
+  expect(outcomeOf({ agentId: 'x', answer: 'API Error: 529', reason: 'answer' })).toEqual({ ok: true, text: 'API Error: 529', files: [] })
+  expect(outcomeOf({ agentId: 'x', answer: 'API Error: 529', reason: 'aborted' })).toEqual({ ok: false, reason: 'Stopped.' })
+  expect(outcomeOf({ agentId: 'x', answer: 'API Error: 529', reason: 'refusal', refusal: 'cyber' })).toEqual({ ok: false, reason: 'Refused: cyber' })
+})
+
+test('the engine\'s StopFailure of a sub-agent goes with its turn end; the main thread\'s is ignored', async () => {
+  // register's two hooks, taken from a registration that keeps only them, run with this file's completions.
+  const hooks = new Map<string, (...args: unknown[]) => unknown>()
+  register(((name: string, ...rest: unknown[]) => void hooks.set(name, rest[rest.length - 1] as (...args: unknown[]) => unknown)) as never, {})
+  const next = () => undefined
+  const ended = completions.wait('ag-sf')
+  hooks.get('classic.StopFailure')!({}, { hook_event_name: 'StopFailure', error: 'rate_limit', error_details: 'API Error: 429' }, next)
+  hooks.get('classic.StopFailure')!({}, { hook_event_name: 'StopFailure', error: 'overloaded', agent_id: 'ag-sf' }, next)
+  hooks.get('turn.complete')!({}, { agentId: 'ag-sf', answer: '', reason: 'error' }, next)
+  expect(outcomeOf(await ended)).toMatchObject({ ok: false, transient: { kind: 'overloaded' } })
+})
+
+test('a Local run starts the agent again after a rate limit; the first agent is let go', async () => {
+  const g = connect(graph([node('a', 'Lead'), node('b', 'Reader')]), 'a', 'b', 'delegate')
+  const spawned: string[] = []
+  const { d } = deps({
+    spawn: async () => {
+      const agentId = `ag-${spawned.length + 1}`
+      spawned.push(agentId)
+      // The engine ends the turn after the spawn has returned: the first with a rate limit, the second with an answer.
+      setTimeout(() => {
+        if (agentId === 'ag-1') d.completions.fail(agentId, { error: 'rate_limit', details: 'API Error: 429' })
+        d.completions.complete(agentId === 'ag-1' ? { agentId, answer: '', reason: 'error' } : { agentId, answer: 'All done', reason: 'answer' })
+      }, 1)
+      return { agentId }
+    },
+  })
+  const waits: number[] = []
+  const result = await runGraph(g, 'Go', createLocalBackend(g, d), { onUpdate: () => {}, wait: async ms => void waits.push(ms), now: () => 0 })
+  expect('outputs' in result && result.outputs).toEqual({ a: 'All done' })
+  expect(spawned).toEqual(['ag-1', 'ag-2'])
+  expect(waits).toEqual([30_000])
+  expect(d.guard.check('ag-1', 'general-purpose')).toBeUndefined()
 })
 
 // 100 000 input and 20 000 output tokens of Sonnet 4.6: $0.60.

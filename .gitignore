@@ -3,3 +3,4 @@
 .factory/
 node_modules/
 .env*
+agent-graph/**/*.js

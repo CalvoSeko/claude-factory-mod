@@ -1,5 +1,5 @@
 export type EdgeKind = 'handoff' | 'delegate' | 'retry'
-export type BackendKind = 'local' | 'cloud'
+export type BackendKind = 'local' | 'headless' | 'cloud'
 export type CloudRef = { agentId: string; version: number; hash: string }
 
 export type AgentNode = {
@@ -32,6 +32,14 @@ export type Edge = { id: string; from: string; to: string; kind: EdgeKind; retri
 
 // One judgement of a retry loop: what the card a retry arrow leaves decided in a round.
 export type RoundEntry = { round: number; passed: boolean; note: string; at: number }
+
+// Why an agent failed for a reason that clears by waiting.
+export type RestartKind = 'usage-limit' | 'rate-limit' | 'overloaded' | 'network' | 'server'
+// One automatic retry after a temporary failure: when the failure came, why, and how long the run waited.
+// `link` is the failed attempt's Console link; `stopped` is set when a stop ended the wait.
+export type RestartEntry = { attempt: number; at: number; kind: RestartKind; error: string; waitMs: number; link?: string; stopped?: true }
+// The wait before an automatic retry: retry `attempt` of `of`, due at `until`.
+export type RestartWait = { attempt: number; of: number; until: number; kind: RestartKind; error: string }
 
 export type Graph = {
   id: string
@@ -87,6 +95,10 @@ export type NodeRunView = {
   round?: number
   // On the card a retry arrow leaves: its judgement of each round.
   rounds?: RoundEntry[]
+  // The automatic retries after temporary failures (a limit, an overload, the network), and the one it waits for now
+  // (the status stays `running` meanwhile).
+  restarts?: RestartEntry[]
+  restartWait?: RestartWait
 }
 export type RunView = {
   graphId: string
@@ -123,6 +135,7 @@ export type NodeRecord = {
   calledBy?: string                 // a delegate helper's entry: the agent that called it
   round?: number                    // as NodeRunView.round
   rounds?: RoundEntry[]             // as NodeRunView.rounds
+  restarts?: RestartEntry[]         // as NodeRunView.restarts
 }
 
 export type RunRecord = {

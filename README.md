@@ -6,7 +6,8 @@
 - **Check cards.** A card can run a shell command (tests, lint, type-check) instead of an agent; a failing check sends the work back along its retry arrow.
 - **Runs you can watch.** Cards show live status, cost and the tool calls each agent makes. Pause before a card, edit what an agent got and run from there, or rerun from any card.
 - **Limits.** A budget per agent and a cap per run.
-- **Local or cloud.** Run agents as Claude Code subagents, or as Claude Managed Agents.
+- **Retries after temporary failures.** An agent stopped by a usage limit, an overload (429/529), a network or a server error is started again after 30 s, 2 min, then 5 min (or the stated reset time), up to 3 times.
+- **Local, Headless or Cloud.** Run agents as Claude Code subagents of your session, as their own headless Claude Code processes, or as Claude Managed Agents.
 - **Claude can run your graphs.** Each graph is also a tool the main Claude session can call with a task.
 
 ## Install
@@ -28,7 +29,9 @@ Cloud graphs use your Claude Code Anthropic login, or an API key set in the plug
 
 ## Auto mode
 
-Runs do not work in auto mode yet. The mod starts each card's agent itself, and auto mode's classifier cannot judge an agent start that no message in the conversation asked for, so the card fails ("gave no verdict for Agent"). Plugins have no way to approve their own agent starts, so until Claude Code changes this, switch to another permission mode (for example Accept edits) before starting a run and keep it until the run ends.
+Use a **Headless** graph (toolbar button: Local → Headless → Cloud). Each card runs as its own `claude -p --permission-mode auto` process with the card's instructions, tools, model and budget, so auto mode judges every action against the card's own prompt. Card processes do not load agent-graph, do not reach your session, and are not saved to your resume list.
+
+**Local** graphs do not work in auto mode: the mod starts each card's agent itself, auto mode's classifier cannot judge an agent start that no message asked for ("gave no verdict for Agent"), and plugins cannot approve their own agent starts. Run Local graphs in another permission mode (for example Accept edits).
 
 ## Develop
 

@@ -3,7 +3,8 @@ import { gatherContext, handoffNames, type ContextSource } from '../compile'
 import { handoffDir, nodeById } from '../model'
 import { STOPPED_TEXT, UNFINISHED_TEXT, type Tracker } from '../activity'
 import type { Backend, NodeOutcome } from '../runner'
-import type { SessionEvent } from './api'
+import { transientOfCloud, transientOfStatus, transientOfText, type Transient } from '../transient'
+import { ApiError, type SessionEvent } from './api'
 import { ensureEnvironment, syncGraph, type SyncDeps } from './sync'
 
 export type CloudDeps = SyncDeps & {
@@ -26,6 +27,13 @@ const LISTING_RETRIES = 1
 const STOP_POLLS = 3
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+// A request that threw for a temporary reason: an API error by its status, anything else only when it is the network's.
+function transientOfThrown(error: unknown): Transient | undefined {
+  if (error instanceof ApiError) return transientOfStatus(error.status, error.message)
+  const transient = transientOfText(errorText(error))
+  return transient?.kind === 'network' ? transient : undefined
+}
 
 export function textOf(event: SessionEvent): string {
   const content = event['content']
@@ -85,40 +93,49 @@ export function createCloudBackend(graph: Graph, deps: CloudDeps): Backend {
       const resources: Array<Record<string, unknown>> = []
       const gathered = await gatherContext(current.contextFiles, deps.context)
       if ('error' in gathered) return { done: Promise.resolve({ ok: false, reason: gathered.error }), stop: async () => {} }
-      for (const file of gathered.files) {
-        if (file.text.includes('\u0000')) return { done: Promise.resolve({ ok: false, reason: `Binary context files are not supported on Cloud yet: ${file.path}` }), stop: async () => {} }
-        resources.push({ type: 'file', file_id: await upload(file.relative.split('/').pop()!, file.text), mount_path: `/workspace/context/${file.relative}` })
-      }
-      for (const input of inputs) {
-        // A reused agent is not in the prepared graph; its name comes from the whole one, as in the prompt.
-        const from = nodeById(synced, input.from)?.name ?? nodeById(graph, input.from)?.name ?? input.from
-        const names = handoffNames(input.files.map(f => f.name))
-        input.files.forEach((file, i) => {
-          resources.push({ type: 'file', file_id: file.id, mount_path: `/workspace/handoff/${handoffDir(from, input.from)}/${names[i]!}` })
+      // A request that fails for a temporary reason (429, 529, 5xx, the network) ends the start as a temporary failure;
+      // any other error is thrown as before.
+      let session: { id: string }
+      try {
+        for (const file of gathered.files) {
+          if (file.text.includes('\u0000')) return { done: Promise.resolve({ ok: false, reason: `Binary context files are not supported on Cloud yet: ${file.path}` }), stop: async () => {} }
+          resources.push({ type: 'file', file_id: await upload(file.relative.split('/').pop()!, file.text), mount_path: `/workspace/context/${file.relative}` })
+        }
+        for (const input of inputs) {
+          // A reused agent is not in the prepared graph; its name comes from the whole one, as in the prompt.
+          const from = nodeById(synced, input.from)?.name ?? nodeById(graph, input.from)?.name ?? input.from
+          const names = handoffNames(input.files.map(f => f.name))
+          input.files.forEach((file, i) => {
+            resources.push({ type: 'file', file_id: file.id, mount_path: `/workspace/handoff/${handoffDir(from, input.from)}/${names[i]!}` })
+          })
+        }
+        session = await deps.api.createSession({
+          agent: { type: 'agent', id: current.cloud.agentId, version: current.cloud.version },
+          environment_id: environmentId || (await ensureEnvironment(deps)),
+          title: `${synced.name} / ${current.name}`,
+          resources,
+          budget: { type: 'limit', max_list_cost: { amount: String(Math.round(current.budgetUsd * 100)), currency: 'USD' } },
+          initial_events: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }],
         })
+      } catch (error) {
+        const transient = transientOfThrown(error)
+        if (transient === undefined) throw error
+        return { done: Promise.resolve({ ok: false, reason: `Could not start the cloud session: ${errorText(error)}`, transient }), stop: async () => {} }
       }
-
-      const session = await deps.api.createSession({
-        agent: { type: 'agent', id: current.cloud.agentId, version: current.cloud.version },
-        environment_id: environmentId || (await ensureEnvironment(deps)),
-        title: `${synced.name} / ${current.name}`,
-        resources,
-        budget: { type: 'limit', max_list_cost: { amount: String(Math.round(current.budgetUsd * 100)), currency: 'USD' } },
-        initial_events: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }],
-      })
       const link = `https://platform.claude.com/workspaces/${deps.workspaceId}/sessions/${session.id}`
       let isStopped = false
 
-      // Best effort, tried twice; never throws.
-      const interrupt = async (): Promise<void> => {
+      // Best effort, tried twice; never throws. True once the session has received it.
+      const interrupt = async (): Promise<boolean> => {
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
             await deps.api.sendEvents(session.id, [{ type: 'user.interrupt' }])
-            return
+            return true
           } catch {
             // Try once more.
           }
         }
+        return false
       }
 
       const activity = captureActivity(deps, graph, current, session.id)
@@ -141,8 +158,10 @@ export function createCloudBackend(graph: Graph, deps: CloudDeps): Backend {
           } catch (error) {
             failures++
             if (failures <= RETRY_MS.length) continue
-            await interrupt()
-            return { ok: false, reason: `Lost contact with the cloud session (${errorText(error)}); it was asked to stop.` }
+            // Started again only once the old session has its stop request: else it may go on (and bill) beside the new one.
+            const isConfirmed = await interrupt()
+            const reason = `Lost contact with the cloud session (${errorText(error)}); it was asked to stop.`
+            return { ok: false, reason, ...(isConfirmed ? { transient: { kind: 'network' as const, text: reason } } : {}) }
           }
           for (const event of events) {
             if (seen.has(event.id)) continue
@@ -156,7 +175,8 @@ export function createCloudBackend(graph: Graph, deps: CloudDeps): Backend {
               if (Number.isFinite(amount)) onCost(amount / 100)
             } else if (event.type === 'session.error') {
               const detail = (event['error'] as { message?: string } | undefined)?.message ?? 'unknown error'
-              return { ok: false, reason: `Session error: ${detail}` }
+              const transient = transientOfCloud(event['error'])
+              return { ok: false, reason: `Session error: ${detail}`, ...(transient !== undefined ? { transient } : {}) }
             } else if (event.type === 'session.status_terminated') {
               return last !== '' && !isStopped
                 ? { ok: true, text: last, files: await outputsOf(session.id, current) }

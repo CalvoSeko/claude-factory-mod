@@ -117,9 +117,11 @@ test('asGraph accepts a graph file and fills node defaults, and says what is wro
   if (typeof good === 'string') return
   expect(good.description).toBe('')
   expect(good.nodes[0]).toEqual({ id: 'n_a', name: 'A', x: 2, y: 1, instructionsFile: '/a.md', skills: [], contextFiles: [], tools: [], model: null, budgetUsd: 2 })
+  expect(asGraph({ id: 'g_h', name: 'H', backend: 'headless', nodes: [], edges: [] })).toMatchObject({ id: 'g_h', backend: 'headless' })
+  expect(asGraph({ id: 'g_c', name: 'C', backend: 'cloud', nodes: [], edges: [] })).toMatchObject({ backend: 'cloud' })
   expect(asGraph([])).toBe('not a graph object.')
   expect(asGraph({ id: 'g x', name: 'X', backend: 'local', nodes: [], edges: [] })).toBe('its id is missing or has characters other than letters, digits, _ and -.')
-  expect(asGraph({ id: 'g_x', name: 'X', backend: 'remote', nodes: [], edges: [] })).toBe('its backend must be "local" or "cloud".')
+  expect(asGraph({ id: 'g_x', name: 'X', backend: 'remote', nodes: [], edges: [] })).toBe('its backend must be "local", "headless" or "cloud".')
   expect(asGraph({ id: 'g_x', name: 'X', backend: 'local', nodes: [{ id: 'n' }], edges: [] })).toBe('every node needs an id, a name, x, y and an instructionsFile.')
   expect(asGraph({ id: 'g_x', name: 'X', backend: 'local', nodes: [], edges: [{ id: 'e', from: 'a', to: 'b', kind: 'other' }] })).toBe('every edge needs an id, from, to and a kind of handoff, delegate or retry.')
 })

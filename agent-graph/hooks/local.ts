@@ -8,12 +8,15 @@ import {
 import type { Guard } from './guard'
 import { isCheck, nodeById, outgoing, retryOut, type Problem } from './model'
 import { handoffSection, type Backend, type Handoff, type NodeOutcome, type NodeRun } from './runner'
+import { transientOfEngine, transientOfText } from './transient'
 
+// `failure` (an 'error' end only): the engine's kind of API error and its words (from classic.StopFailure).
 export type TurnEnd = {
   agentId: string
   answer: string
   reason: 'answer' | 'aborted' | 'refusal' | 'error'
   refusal?: string
+  failure?: { error: string; details?: string }
 }
 
 const EARLY_LIMIT = 50
@@ -21,12 +24,18 @@ const EARLY_LIMIT = 50
 // How the activity tracker knows a Local agent: its engine id, so no id of another backend can clash.
 export const localKey = (agentId: string) => `local:${agentId}`
 
-// Matches sub-agent turn endings (from turn.complete) to the runs waiting on them.
+// Matches sub-agent turn endings (from turn.complete) to the runs waiting on them, with the API error that ended
+// the turn when the engine reported one first.
 export function createCompletions() {
   const waiting = new Map<string, (end: TurnEnd) => void>()
   const early = new Map<string, TurnEnd>()
+  const failures = new Map<string, NonNullable<TurnEnd['failure']>>()
 
   return {
+    fail(agentId: string, failure: NonNullable<TurnEnd['failure']>): void {
+      failures.set(agentId, failure)
+      if (failures.size > EARLY_LIMIT) failures.delete(failures.keys().next().value!)
+    },
     wait(agentId: string): Promise<TurnEnd> {
       const ended = early.get(agentId)
       if (ended !== undefined) {
@@ -43,7 +52,11 @@ export function createCompletions() {
         }
       })
     },
-    complete(end: TurnEnd): void {
+    complete(turnEnd: TurnEnd): void {
+      // A failure is used up by the agent's turn end, whatever the end.
+      const failure = failures.get(turnEnd.agentId)
+      failures.delete(turnEnd.agentId)
+      const end = turnEnd.reason === 'error' && failure !== undefined ? { ...turnEnd, failure } : turnEnd
       const resolve = waiting.get(end.agentId)
       if (resolve !== undefined) {
         waiting.delete(end.agentId)
@@ -62,7 +75,16 @@ export function outcomeOf(end: TurnEnd): NodeOutcome {
   if (end.reason === 'answer') return { ok: true, text: end.answer, files: [] }
   if (end.reason === 'aborted') return { ok: false, reason: 'Stopped.' }
   if (end.reason === 'refusal') return { ok: false, reason: end.refusal ? `Refused: ${end.refusal}` : 'Refused.' }
-  return { ok: false, reason: 'The agent stopped with an error.' }
+  // The engine's kind of error decides whether it is temporary; without one, only an answer that is the engine's
+  // own API error text is read (any other text is the agent's, and may mention anything).
+  const apiError = end.answer.trimStart().startsWith('API Error') ? firstLine(end.answer) : undefined
+  const transient = end.failure !== undefined ? transientOfEngine(end.failure.error, end.failure.details) : apiError !== undefined ? transientOfText(apiError) : undefined
+  const detail = end.failure !== undefined ? (end.failure.details ?? end.failure.error) : apiError
+  return {
+    ok: false,
+    reason: detail !== undefined && detail !== '' ? `The agent stopped with an error: ${detail}` : 'The agent stopped with an error.',
+    ...(transient !== undefined ? { transient } : {}),
+  }
 }
 
 // A command the host runs: its output piece by piece, then how it ended. Leaving the stream kills the child.

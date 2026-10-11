@@ -1,17 +1,20 @@
-import type { ActivityItem, AgentNode, Graph, NodeRunView, OutputFile, RoundEntry, RunView } from '../types'
+import type { ActivityItem, AgentNode, Graph, NodeRunView, OutputFile, RestartEntry, RoundEntry, RunView } from '../types'
 import { clip, STOPPED_TEXT, UNFINISHED_TEXT, type HelperCall, type Tracker } from './activity'
 import { handoffNames } from './compile'
 import { DEFAULT_RETRIES, endNodes, handoffDir, incoming, isCheck, isDelegateOnly, loopOf, nodeById, retryOut, runnableNodes, validate, type Problem } from './model'
+import { MAX_RESTARTS, restartDelay, type Transient } from './transient'
 
 export type Handoff = { from: string; text: string; files: OutputFile[] }
 // `detail` (a fail only): what a check card printed last, for the feedback of a retry.
-export type NodeOutcome = { ok: true; text: string; files: OutputFile[] } | { ok: false; reason: string; detail?: string }
+// `transient` (a fail only): the backend found it temporary (a limit, an overload, the network), so the agent is started again.
+export type NodeOutcome = { ok: true; text: string; files: OutputFile[] } | { ok: false; reason: string; detail?: string; transient?: Transient }
 export type NodeRun = { done: Promise<NodeOutcome>; stop(): Promise<void>; link?: string }
 
 export type Backend = {
   prepare(graph: Graph): Promise<Problem[]>
-  start(node: AgentNode, prompt: string, inputs: Handoff[], onCost: (usd: number) => void): Promise<NodeRun>
-  // The costs it reports are estimates (shown with ≈).
+  // `estimated`: this one report is an estimate (a later exact report may replace it).
+  start(node: AgentNode, prompt: string, inputs: Handoff[], onCost: (usd: number, estimated?: boolean) => void): Promise<NodeRun>
+  // Every cost it reports is an estimate (shown with ≈).
   estimatesCost?: true
 }
 
@@ -48,6 +51,10 @@ export const STOP_DEADLINE_MS = 15_000
 export const ACTIVITY_PUBLISH_MS = 250
 
 const stopQuietly = (run: NodeRun) => Promise.resolve().then(() => run.stop()).catch(() => undefined)
+
+// A failure the backend found temporary, that came without a stop having been asked for.
+const restartable = (o: NodeOutcome, stoppedAtEnd: boolean): o is Extract<NodeOutcome, { ok: false }> & { transient: Transient } =>
+  !o.ok && o.transient !== undefined && !stoppedAtEnd
 
 // One received handoff as the next card is told of it (with its files when it has any).
 export function handoffSection(g: Graph, input: Handoff): string {
@@ -187,6 +194,8 @@ export async function runGraph(
   // and the feedback section a retry target's next input ends with.
   const spent = new Map<string, number>()
   const feedback = new Map<string, string>()
+  // How many times each card was started again after a temporary failure, all its rounds together.
+  const restarts = new Map<string, number>()
   for (const n of runnable) {
     const saved = seed[n.id]
     if (saved === undefined) continue
@@ -422,6 +431,7 @@ export async function runGraph(
         ...(own && old.costEstimated === true ? { costEstimated: true } : {}),
         ...(own && old.activity !== undefined ? { activity: old.activity } : {}),
         ...(old.rounds !== undefined ? { rounds: old.rounds } : {}),
+        ...(old.restarts !== undefined ? { restarts: old.restarts } : {}),
       }
       delete files[id]
       details.delete(id)
@@ -499,30 +509,34 @@ export async function runGraph(
           await close()
           return
         }
+        // One start of the agent, to its ending, and whether a stop had been asked for by then.
         // Once a stop has had its time, a start that has not returned no longer holds the node;
         // if it returns later, that run is asked to stop (and never archived or deleted).
-        // A card sent back by a retry costs its earlier rounds plus this one; a report of a round that comes
-        // after its card was sent back still counts, on the card's entry as it is now.
-        let reported = 0
-        const starting = backend.start(node, prompt, inputs, usd => {
-          const total = (spent.get(node.id) ?? 0) + usd - reported
-          reported = usd
-          spent.set(node.id, total)
-          const entry = view.nodes[node.id] ?? v
-          entry.costUsd = total
-          if (backend.estimatesCost === true) entry.costEstimated = true
-          void publish()
-        })
-        const started = await Promise.race([starting, deadline.then(late => ({ late }))])
-        let outcome: NodeOutcome
-        let stoppedAtEnd = true
-        if ('late' in started) {
-          void starting.then(
-            late => requestStop(late),
-            () => undefined,
-          )
-          outcome = started.late
-        } else {
+        // A card sent back by a retry (or started again after a temporary failure) costs its earlier starts plus
+        // this one; a report of a start that comes after its card was sent back still counts, on the card's entry as it is now.
+        const attempt = async (): Promise<{ outcome: NodeOutcome; stoppedAtEnd: boolean }> => {
+          let reported = 0
+          // The cost stays marked estimated when an earlier start of the card ended on an estimate; within this
+          // start, an exact report (a final total) replaces the estimates before it.
+          const wasEstimated = (view.nodes[node.id] ?? v).costEstimated === true
+          const starting = backend.start(node, prompt, inputs, (usd, estimated) => {
+            const total = (spent.get(node.id) ?? 0) + usd - reported
+            reported = usd
+            spent.set(node.id, total)
+            const entry = view.nodes[node.id] ?? v
+            entry.costUsd = total
+            if (backend.estimatesCost === true || estimated === true || wasEstimated) entry.costEstimated = true
+            else delete entry.costEstimated
+            void publish()
+          })
+          const started = await Promise.race([starting, deadline.then(late => ({ late }))])
+          if ('late' in started) {
+            void starting.then(
+              late => requestStop(late),
+              () => undefined,
+            )
+            return { outcome: started.late, stoppedAtEnd: true }
+          }
           run = started
           runs.set(node.id, run)
           if (run.link !== undefined) v.link = run.link
@@ -536,13 +550,55 @@ export async function runGraph(
           finished.catch(() => undefined)
           await publish()
           if (isStopped) await requestStop(run)
-          if (isStopped && settled.outcome === undefined) {
-            // Stopped before it had said anything: the stop was asked for, so that is how it ends.
-            outcome = { ok: false, reason: stopText() }
-          } else {
-            outcome = await Promise.race([finished, deadline])
-            stoppedAtEnd = settled.outcome === outcome ? settled.stopped : true
+          // Stopped before it had said anything: the stop was asked for, so that is how it ends.
+          if (isStopped && settled.outcome === undefined) return { outcome: { ok: false, reason: stopText() }, stoppedAtEnd: true }
+          const outcome = await Promise.race([finished, deadline])
+          return { outcome, stoppedAtEnd: settled.outcome === outcome ? settled.stopped : true }
+        }
+        let { outcome, stoppedAtEnd } = await attempt()
+        // A temporary failure (a limit, an overload, the network) starts the agent again, fresh and with the same input,
+        // after a wait; at most MAX_RESTARTS times per agent in the run. A stop ends the wait.
+        while (restartable(outcome, stoppedAtEnd) && !isStopped && hooks.wait !== undefined && (restarts.get(node.id) ?? 0) < MAX_RESTARTS) {
+          const n = (restarts.get(node.id) ?? 0) + 1
+          restarts.set(node.id, n)
+          const at = hooks.now !== undefined ? await hooks.now() : Date.now()
+          const ms = restartDelay(outcome.transient, n, at)
+          const entry: RestartEntry = { attempt: n, at, kind: outcome.transient.kind, error: outcome.reason, waitMs: ms, ...(run?.link !== undefined ? { link: run.link } : {}) }
+          v.restarts = [...(v.restarts ?? []), entry]
+          v.restartWait = { attempt: n, of: MAX_RESTARTS, until: at + ms, kind: entry.kind, error: entry.error }
+          // The failed start is asked to stop (it may still be winding down), and its calls still open end.
+          if (run !== undefined) void requestStop(run)
+          runs.delete(node.id)
+          try {
+            tracker?.endOpen(UNFINISHED_TEXT, node.id)
+            syncAgent(node.id)
+          } catch {
+            // Activity is only for display.
           }
+          delete v.current
+          await publish()
+          const woke = await Promise.race([
+            hooks.wait(ms).then(() => 'time' as const, () => 'refused' as const),
+            stopping.then(() => 'stop' as const),
+          ])
+          delete v.restartWait
+          if (woke === 'stop' || isStopped) {
+            entry.stopped = true
+            outcome = { ok: false, reason: stopText() }
+            stoppedAtEnd = true
+            break
+          }
+          if (woke === 'refused') {
+            // No clock to wait with: it ends failed as it came, and no retry is recorded.
+            restarts.set(node.id, n - 1)
+            if (v.restarts.length > 1) v.restarts = v.restarts.slice(0, -1)
+            else delete v.restarts
+            break
+          }
+          ;({ outcome, stoppedAtEnd } = await attempt())
+        }
+        if (!outcome.ok && outcome.transient !== undefined && !stoppedAtEnd && (restarts.get(node.id) ?? 0) >= MAX_RESTARTS) {
+          outcome = { ...outcome, reason: `${outcome.reason} (gave up after ${MAX_RESTARTS} automatic retries)` }
         }
         if (outcome.ok) {
           v.status = 'done'

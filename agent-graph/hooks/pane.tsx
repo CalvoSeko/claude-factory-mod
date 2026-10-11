@@ -1,6 +1,6 @@
 import type { Elements, EngineInterface, RenderElement } from 'claude-code'
 
-import type { ActivityItem, AgentNode, EdgeKind, Graph, RunSummary, RunView, TestCase } from '../types'
+import type { ActivityItem, AgentNode, BackendKind, EdgeKind, Graph, RestartWait, RunSummary, RunView, TestCase } from '../types'
 import {
   acceptLatest, addAgent, addCheck, cachedInstructions, cachedLastRun, cachedRunIndex, cachedSkills, cachedTests, cancelConnect, compareTest, confirmEdge, continueAgent, continueAll,
   deleteGraph, deleteSelected, deleteTest, describeGraph, editInstructions, editLastInput, editMustHold, editPausedInput, hasInputReady, insertResult, isBusy, latestRun,
@@ -13,6 +13,7 @@ import { ANTHROPIC_SKILLS } from './cloud/sync'
 import { cardsOf, clockTime, drawEdges, edgesOf, GLYPH, ROW_RATIO, SVG_LIMIT, timelineOf, timelineSpan, VEC_UNIT, vectorBaseSvg, vectorGlowSvg, type CanvasProps, type EdgeView, type TimelineCell } from './grid'
 import { capText, isCap, runSpend, usdText } from './cost'
 import { staleOf } from './records'
+import { resetTimeOf, restartWords } from './transient'
 import { ALL_DISABLED, connect, DEFAULT_RETRIES, isCheck, MODEL_CHOICES, NO_AGENTS, nextKind, NODE_H, NODE_W, nodeById, outgoing, problemsFor, TOOL_CHOICES, validate, warningsOf, withoutDisabled, type Problem } from './model'
 
 // What `host.ui.resolve(e)` answers for the band; register.tsx resolves it (the
@@ -39,6 +40,9 @@ export async function bandButton(host: Host, { Box, Button, Text }: BandParts): 
 export type PaneParts = Pick<Elements['terminal' | 'desktop'], 'Box' | 'Text' | 'Button' | 'Input' | 'Select' | 'Client' | 'Markdown' | 'Link'> & { Svg?: Elements['desktop']['Svg'] | undefined }
 export type PaneProps = { bodyColumns: number; scroll: { bodyRows: number } }
 
+// The toolbar's backend button: its label, and the kind a press switches to.
+const BACKEND_LABEL: Record<BackendKind, string> = { local: 'Local', headless: 'Headless', cloud: 'Cloud' }
+const NEXT_BACKEND: Record<BackendKind, BackendKind> = { local: 'headless', headless: 'cloud', cloud: 'local' }
 const INSPECTOR_WIDTH = 38
 const RED = '#d4453b'
 const ORANGE = '#d97757'
@@ -95,6 +99,16 @@ const firstLines = (text: string, count: number) => text.split('\n').slice(0, co
 function runLabel(s: RunSummary): string {
   const origin = s.mode === 'from-here' ? `from ${s.fromName ?? 'here'}` : s.mode === 'tool' ? 'by Claude' : s.mode === 'test' ? `test: ${s.testName ?? ''}` : 'full run'
   return `${clockTime(s.at)} · ${s.ending === 'over-cap' ? 'over cap' : s.ending} · ${usdText(s.costUsd, s.costEstimated)} · ${origin} · "${s.taskLine}"`
+}
+
+// Why an agent waits to be started again, and when it will be: `failedAt` is when the failure came (a reset
+// written as a span counts from then).
+const RESTART_CAUSE_CHARS = 160
+function restartText(w: RestartWait, failedAt: number): { title: string; cause: string; when: string } {
+  const cause = `${restartWords(w.kind)}: ${clip(w.error.split('\n').map(l => l.trim()).find(l => l !== '') ?? '', RESTART_CAUSE_CHARS)}`
+  const reset = w.kind === 'usage-limit' ? resetTimeOf(w.error, failedAt) : undefined
+  const at = clockTime(w.until)
+  return { title: `Waiting to retry (${w.attempt} of ${w.of})`, cause, when: reset !== undefined && reset > failedAt ? `Usage limit resets at ${clockTime(reset)}; tries again at ${at}.` : `Tries again at ${at}.` }
 }
 
 // How a test's last result reads in its row.
@@ -333,8 +347,19 @@ export async function drawPane(host: Host, parts: PaneParts, props: PaneProps): 
     const inputIsLong = waiting !== undefined && (waiting.split('\n').length > PAUSED_INPUT_LINES || waiting.length > PAUSED_INPUT_CHARS)
     // Show all stops at PAUSED_INPUT_MAX characters; the rest is in the file Edit input opens.
     const inputCut = waiting === undefined || ui.inputMore !== true || waiting.length <= PAUSED_INPUT_MAX ? 0 : Array.from(waiting).length - PAUSED_INPUT_MAX
+    // Only while the run goes: a stop ends the wait.
+    const restartWait = isRunning ? nodeRun?.restartWait : undefined
+    const restart = restartWait === undefined ? undefined : restartText(restartWait, nodeRun?.restarts?.at(-1)?.at ?? restartWait.until)
     return (
       <Box flexDirection="column" rowGap={1}>
+        {restart !== undefined ? (
+          <Box flexDirection="column">
+            <Text bold>{restart.title}</Text>
+            <Text>{restart.cause}</Text>
+            <Text>{restart.when}</Text>
+            <Text dimColor>■ Stop ends the wait.</Text>
+          </Box>
+        ) : null}
         {waiting !== undefined ? (
           <Box flexDirection="column">
             <Text bold>{`Paused before ${node.name}`}</Text>
@@ -428,6 +453,9 @@ export async function drawPane(host: Host, parts: PaneParts, props: PaneProps): 
             <Text bold>{GLYPH[nodeRun.status]} {nodeRun.status}{nodeRun.costUsd !== undefined ? ` · ${usdText(nodeRun.costUsd, nodeRun.costEstimated)}` : ''}</Text>
             {nodeRun.link !== undefined ? <Link href={nodeRun.link} label="Open in Console" /> : null}
             {nodeRun.error !== undefined ? <Text color={RED}>{nodeRun.error}</Text> : null}
+            {nodeRun.restarts !== undefined && nodeRun.restarts.length > 0 ? (
+              <Text dimColor>{`Retried automatically: ${nodeRun.restarts.map(r => `${clockTime(r.at)} ${restartWords(r.kind)}${r.stopped === true ? ' (stopped)' : ''}`).join(' · ')}`}</Text>
+            ) : null}
             {nodeRun.output !== undefined ? <Markdown text={clip(nodeRun.output, 1500)} /> : null}
           </Box>
         ) : null}
@@ -529,9 +557,9 @@ export async function drawPane(host: Host, parts: PaneParts, props: PaneProps): 
           value={g.id}
           onSelect={v => (v === '__new__' ? newGraph(host) : openGraph(host, v))}
         />
-        <Button key="backend" label={g.backend === 'local' ? 'Local' : 'Cloud'} onPress={() => setBackend(host, g.backend === 'local' ? 'cloud' : 'local')} />
+        <Button key="backend" label={BACKEND_LABEL[g.backend]} onPress={() => setBackend(host, NEXT_BACKEND[g.backend])} />
         <Button key="add" label="+ Agent" hotkey="a" onPress={() => addAgent(host)} />
-        {g.backend === 'local' ? <Button key="add-check" label="+ Check" onPress={() => addCheck(host)} /> : null}
+        {g.backend !== 'cloud' ? <Button key="add-check" label="+ Check" onPress={() => addCheck(host)} /> : null}
         <Button key="connect" label={c !== null ? 'Cancel connect' : 'Connect'} hotkey="c" onPress={() => (c !== null ? cancelConnect(host) : startConnect(host))} />
         {ui.selected !== null ? <Button key="delete" label="Delete" onPress={() => deleteSelected(host)} /> : null}
         {busy
