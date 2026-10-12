@@ -24,6 +24,8 @@ To load it in every session, add the folder to `CLAUDE_CODE_PLUGIN_DIRS` in the 
 
 Graphs saved as JSON in `~/.claude/agent-graph/import/` are imported when a session starts or `/agent-graph` runs.
 
+**Example graph:** [`graphs/software-factory-v2`](graphs/software-factory-v2/) turns a feature request into a reviewed, tested pull request. Its README has the install steps.
+
 ## Shared graphs
 
 A graph runs agents and shell commands on your machine with your permissions. An imported graph therefore starts **untrusted**: it gets no tool, Claude cannot read, edit or run it, and pressing Run first shows everything it would do (each check command, each card's tools, model, budget and context files, its helpers and description). It runs only after you press **Trust and run**. Imports are also checked and clamped (ids, budgets, retries, run cap), and the mod only ever writes or deletes files inside the graph's own folder. Only trust graphs from people you trust. See `HOW-IT-WORKS.md` ("Shared graphs").

@@ -1,0 +1,424 @@
+{
+  "id": "g_2fcd5ec984",
+  "name": "Software factory v2",
+  "description": "Turns a feature request into a reviewed, tested pull request: repo recon (what already exists) → design with every decision proposed → design critic loop (only contested decisions reach you) → one human checkpoint → implementation with a test loop → independent code review with a fix loop → definition-of-done checks → PR description and plain-language HOW-IT-WORKS update → ship (pauses, then commits, pushes and opens the PR; never merges). Follows FACTORY.md in the repository. Run it from inside the repository; the task is the feature request.",
+  "backend": "headless",
+  "nodes": [
+    {
+      "skills": [
+        "domain-modeling"
+      ],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Bash",
+        "Glob",
+        "Grep"
+      ],
+      "model": "sonnet",
+      "budgetUsd": 2,
+      "id": "n_1cabddb48b",
+      "name": "Repo Recon",
+      "x": 2,
+      "y": 1,
+      "instructionsFile": "n_1cabddb48b.md"
+    },
+    {
+      "skills": [
+        "codebase-design",
+        "ponytail"
+      ],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep"
+      ],
+      "model": "opus",
+      "budgetUsd": 6,
+      "id": "n_34abee515d",
+      "name": "Design",
+      "x": 34,
+      "y": 1,
+      "instructionsFile": "n_34abee515d.md"
+    },
+    {
+      "skills": [
+        "codebase-design"
+      ],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep"
+      ],
+      "model": "fable",
+      "budgetUsd": 4,
+      "id": "n_3f63b7cf4b",
+      "name": "Design Critic",
+      "x": 66,
+      "y": 1,
+      "instructionsFile": "n_3f63b7cf4b.md"
+    },
+    {
+      "skills": [
+        "tdd",
+        "ponytail",
+        "diagnosing-bugs"
+      ],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep"
+      ],
+      "model": "opus",
+      "budgetUsd": 10,
+      "id": "n_d2f9859b83",
+      "name": "Implementer",
+      "x": 130,
+      "y": 8,
+      "instructionsFile": "n_d2f9859b83.md",
+      "pauseBefore": false,
+      "whenToUse": "Build logic, data, contract, wiring and test slices of the approved design. Name the slices it owns, pass the whole design, and say whether it runs in its own worktree."
+    },
+    {
+      "skills": [],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep"
+      ],
+      "model": "haiku",
+      "budgetUsd": 1,
+      "id": "n_2ee6b5faea",
+      "name": "Codebase Scout",
+      "x": 98,
+      "y": 8,
+      "instructionsFile": "n_2ee6b5faea.md",
+      "whenToUse": "Find where something lives in the codebase: definitions, callers, existing patterns or tests to copy. Ask a specific question; it answers with file paths and line numbers."
+    },
+    {
+      "skills": [
+        "ponytail"
+      ],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep"
+      ],
+      "model": "sonnet",
+      "budgetUsd": 5,
+      "id": "n_b6016a83ed",
+      "name": "Review Fixes",
+      "x": 2,
+      "y": 8,
+      "instructionsFile": "n_b6016a83ed.md"
+    },
+    {
+      "skills": [
+        "ponytail",
+        "codebase-design"
+      ],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Bash",
+        "Glob",
+        "Grep"
+      ],
+      "model": "fable",
+      "budgetUsd": 20,
+      "id": "n_83ad1371f5",
+      "name": "Reviewer",
+      "x": 2,
+      "y": 15,
+      "instructionsFile": "n_83ad1371f5.md"
+    },
+    {
+      "skills": [],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep"
+      ],
+      "model": "sonnet",
+      "budgetUsd": 2,
+      "id": "n_8818202247",
+      "name": "PR Writer",
+      "x": 66,
+      "y": 15,
+      "instructionsFile": "n_8818202247.md"
+    },
+    {
+      "skills": [],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Bash",
+        "Glob"
+      ],
+      "model": "sonnet",
+      "budgetUsd": 1,
+      "id": "n_05e8a7c124",
+      "name": "Ship",
+      "x": 98,
+      "y": 15,
+      "instructionsFile": "n_05e8a7c124.md",
+      "pauseBefore": true
+    },
+    {
+      "skills": [],
+      "contextFiles": [],
+      "tools": [],
+      "model": null,
+      "budgetUsd": 2,
+      "id": "n_23477dead3",
+      "name": "Tests",
+      "x": 34,
+      "y": 8,
+      "instructionsFile": "",
+      "check": {
+        "command": "npm test",
+        "timeoutMin": 10
+      }
+    },
+    {
+      "skills": [],
+      "contextFiles": [],
+      "tools": [],
+      "model": null,
+      "budgetUsd": 2,
+      "id": "n_0478474f0a",
+      "name": "Definition of Done",
+      "x": 34,
+      "y": 15,
+      "instructionsFile": "",
+      "check": {
+        "command": "npm test && npm run lint --if-present && npm run typecheck --if-present && npm run e2e --if-present",
+        "timeoutMin": 20
+      }
+    },
+    {
+      "skills": [
+        "impeccable",
+        "ponytail"
+      ],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep"
+      ],
+      "model": "opus",
+      "budgetUsd": 10,
+      "id": "n_7e1a9c4b2d",
+      "name": "UI Implementer",
+      "x": 98,
+      "y": 1,
+      "instructionsFile": "n_7e1a9c4b2d.md",
+      "whenToUse": "Build UI slices of the design (screens, components, styles, layout, user-facing copy). Name the slices it owns, pass the whole design, and say whether it runs in its own worktree."
+    },
+    {
+      "id": "n_fb3939e908",
+      "name": "Build Orchestrator",
+      "x": 66,
+      "y": 8,
+      "instructionsFile": "n_fb3939e908.md",
+      "skills": [],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Bash"
+      ],
+      "model": "sonnet",
+      "budgetUsd": 40,
+      "pauseBefore": true
+    },
+    {
+      "id": "n_d2db86c430",
+      "name": "Lens Reviewer",
+      "x": 2,
+      "y": 22,
+      "instructionsFile": "n_d2db86c430.md",
+      "skills": [
+        "ponytail",
+        "codebase-design"
+      ],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Bash",
+        "Glob",
+        "Grep"
+      ],
+      "model": "fable",
+      "budgetUsd": 4,
+      "whenToUse": "Review the change through one lens: correctness, design and maintainability, or tests. Name the lens and pass the design and the implementation summary; it returns findings, not a verdict."
+    },
+    {
+      "id": "n_2cb846c9bd",
+      "name": "Retro",
+      "x": 130,
+      "y": 15,
+      "instructionsFile": "n_2cb846c9bd.md",
+      "skills": [
+        "retro"
+      ],
+      "contextFiles": [],
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Bash",
+        "Write"
+      ],
+      "model": "fable",
+      "budgetUsd": 3
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_c9cba1b884",
+      "from": "n_1cabddb48b",
+      "to": "n_34abee515d",
+      "kind": "handoff"
+    },
+    {
+      "id": "e_f794e6f298",
+      "from": "n_34abee515d",
+      "to": "n_3f63b7cf4b",
+      "kind": "handoff"
+    },
+    {
+      "id": "e_29cfc94185",
+      "from": "n_23477dead3",
+      "to": "n_b6016a83ed",
+      "kind": "handoff"
+    },
+    {
+      "id": "e_5fed169519",
+      "from": "n_b6016a83ed",
+      "to": "n_83ad1371f5",
+      "kind": "handoff"
+    },
+    {
+      "id": "e_1c8468ad9f",
+      "from": "n_83ad1371f5",
+      "to": "n_0478474f0a",
+      "kind": "handoff"
+    },
+    {
+      "id": "e_12e8a47208",
+      "from": "n_0478474f0a",
+      "to": "n_8818202247",
+      "kind": "handoff"
+    },
+    {
+      "id": "e_06e3db2e09",
+      "from": "n_8818202247",
+      "to": "n_05e8a7c124",
+      "kind": "handoff"
+    },
+    {
+      "id": "e_3642c1ce48",
+      "from": "n_d2f9859b83",
+      "to": "n_2ee6b5faea",
+      "kind": "delegate"
+    },
+    {
+      "id": "e_5cc5a3a585",
+      "from": "n_3f63b7cf4b",
+      "to": "n_34abee515d",
+      "kind": "retry",
+      "retries": 2
+    },
+    {
+      "id": "e_0ef0d054f3",
+      "from": "n_83ad1371f5",
+      "to": "n_b6016a83ed",
+      "kind": "retry",
+      "retries": 2
+    },
+    {
+      "id": "e_77a309c5a0",
+      "from": "n_3f63b7cf4b",
+      "to": "n_fb3939e908",
+      "kind": "handoff"
+    },
+    {
+      "id": "e_a50531b84e",
+      "from": "n_fb3939e908",
+      "to": "n_23477dead3",
+      "kind": "handoff"
+    },
+    {
+      "id": "e_98da08b8f8",
+      "from": "n_23477dead3",
+      "to": "n_fb3939e908",
+      "kind": "retry",
+      "retries": 3
+    },
+    {
+      "id": "e_2b5fdf5f9a",
+      "from": "n_fb3939e908",
+      "to": "n_d2f9859b83",
+      "kind": "delegate"
+    },
+    {
+      "id": "e_29b84acc55",
+      "from": "n_fb3939e908",
+      "to": "n_7e1a9c4b2d",
+      "kind": "delegate"
+    },
+    {
+      "id": "e_3aeda9022c",
+      "from": "n_fb3939e908",
+      "to": "n_2ee6b5faea",
+      "kind": "delegate"
+    },
+    {
+      "id": "e_e3f12d9d9c",
+      "from": "n_83ad1371f5",
+      "to": "n_d2db86c430",
+      "kind": "delegate"
+    },
+    {
+      "id": "e_bfbffbae20",
+      "from": "n_83ad1371f5",
+      "to": "n_2ee6b5faea",
+      "kind": "delegate"
+    },
+    {
+      "id": "e_b64354fa5e",
+      "from": "n_34abee515d",
+      "to": "n_2ee6b5faea",
+      "kind": "delegate"
+    },
+    {
+      "id": "e_4dd00baa0a",
+      "from": "n_05e8a7c124",
+      "to": "n_2cb846c9bd",
+      "kind": "handoff"
+    }
+  ],
+  "layout": 2,
+  "runCapUsd": 120
+}
