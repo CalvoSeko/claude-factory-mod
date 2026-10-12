@@ -37,20 +37,29 @@ const norm = (path: string) => path.replace(/[\\]/g, '/').replace(/^[A-Za-z]:/, 
 let ran: string[][] = []
 // The tools registered since the pane opened (name, description, isDeferred).
 let registered: Array<{ name: string; description?: string; isDeferred?: boolean }> = []
+// The plugin's store, so a test can read what was saved (each write a copy, as the engine keeps it).
+let stored = new Map<string, unknown>()
 
 // The module keeps undo stacks per graph id and every test in this file shares it, so each test uses its own graph id.
 async function openPane($: Args[0], on: Args[1], g: Graph, content: (path: string) => string | undefined = () => 'Do the work.', others: Graph[] = []) {
-  mock.store(on, {
-    graphs: [g, ...others].map(x => ({ id: x.id, name: x.name })),
-    [`graph:${g.id}`]: g,
-    ...Object.fromEntries(others.map(x => [`graph:${x.id}`, x])),
+  stored = new Map<string, unknown>([
+    ['graphs', [g, ...others].map(x => ({ id: x.id, name: x.name }))],
+    ...[g, ...others].map(x => [`graph:${x.id}`, x] as const),
+  ])
+  on('store.get', (_$, e) => ({ value: stored.get(e.key) }) as never)
+  on('store.set', (_$, e) => {
+    stored.set(e.key, JSON.parse(JSON.stringify(e.value)))
+    return { value: undefined } as never
+  })
+  on('store.delete', (_$, e) => {
+    stored.delete(e.key)
+    return { value: undefined } as never
   })
   clock = mock.clock(on)
   files = new Map(g.nodes.flatMap(n => (content(n.instructionsFile) === undefined ? [] : [[n.instructionsFile, content(n.instructionsFile)!] as const])))
   toasts.length = 0
   spawned = 0
   ran = []
-  registered = []
   on('ui.open', () => ({ value: { isPlaced: true } }) as never)
   on('ui.toast', (_$, e) => {
     toasts.push(String((e as unknown as { text: string }).text))
@@ -88,6 +97,7 @@ async function openPane($: Args[0], on: Args[1], g: Graph, content: (path: strin
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await band.press({ key: 'agent-graph' })
   await band.unmount()
+  registered = []
   return $.ui.mount({ ...PANE, surface: 'terminal' })
 }
 
@@ -315,19 +325,21 @@ const OTHER = (id: string): Graph => ({ ...flow(id, [node('o', 'Other agent', 2)
 
 test('an edit that changes nothing saves nothing', async ($, on) => {
   const pane = await openPane($, on, flow('g-noop', [node('a', 'Researcher', 2), node('b', 'Writer', 40)], [{ id: 'e1', from: 'a', to: 'b', kind: 'handoff' }]))
+  const before = stored.get('graph:g-noop')
   await pane.post({ events: [{ kind: 'edge', edge: 'missing', action: 'retype' }] })
-  expect(registered).toEqual([])
+  expect(stored.get('graph:g-noop')).toBe(before)
   await pane.post({ events: [{ kind: 'edge', edge: 'e1', action: 'retype' }] })
-  expect(registered.length).toBeGreaterThan(0)
+  expect((stored.get('graph:g-noop') as Graph).edges[0]!.kind).not.toBe('handoff')
   await pane.unmount()
 })
 
-test('a commit registers the tool of the saved graph only', async ($, on) => {
+test('a commit with an unchanged run tool registers nothing', async ($, on) => {
   const g = flow('g-reg', [node('a', 'Researcher', 2)])
   const pane = await openPane($, on, g, undefined, [OTHER('g-reg-other')])
   await key(pane, 'tab')
   await key(pane, 'right')
-  expect(registered.map(r => r.name)).toEqual([toolName(g)])
+  expect((stored.get('graph:g-reg') as Graph).nodes[0]!.x).not.toBe(2)
+  expect(registered).toEqual([])
   await pane.unmount()
 })
 

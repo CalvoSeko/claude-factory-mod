@@ -117,7 +117,15 @@ export type RunView = {
   step?: boolean
   // The run cap this run enforces (the graph's cap as the run started), for the toolbar.
   capUsd?: number
+  // The run's graph as the band needs it (names, what comes next); absent in views saved before it existed.
+  plan?: RunPlan
 }
+
+// By card id: its name, its handoff targets and its retry targets.
+export type RunPlan = { names: Record<string, string>; next: Record<string, string[]>; retry: Record<string, string[]> }
+
+// A subagent of the session the band shows as working.
+export type BandAgent = { id: string; description: string; type: string }
 
 export type NodeRecord = {
   status: NodeStatus                // as the run ended: done | failed | cancelled | skipped
@@ -216,6 +224,6 @@ export type TestCase = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'agent-graph': { index: GraphIndexEntry[]; graph: Graph | null; ui: PaneUi; run: RunView | null }
+    'agent-graph': { index: GraphIndexEntry[]; graph: Graph | null; ui: PaneUi; run: RunView | null; agents: BandAgent[] }
   }
 }

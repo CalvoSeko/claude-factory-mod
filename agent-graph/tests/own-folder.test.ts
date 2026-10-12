@@ -35,7 +35,7 @@ const legacy = (id: string): Graph => {
 function memory(g: Graph) {
   const kv = new Map<string, unknown>([[`graph:${g.id}`, g], ['graphs', [{ id: g.id, name: g.name }]]])
   const fs = new Map<string, string>(g.nodes.map(n => [n.instructionsFile, `Instructions of ${n.name}.`] as const))
-  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id }, run: null }
+  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id }, run: null, agents: [] }
   const toasts: string[] = []
   const writes: string[] = []
   const argvs: string[][] = []

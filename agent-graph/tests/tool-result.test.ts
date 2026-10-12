@@ -47,7 +47,7 @@ const flow = (id: string): Graph => ({
 function memory(g: Graph) {
   const kv = new Map<string, unknown>([[`graph:${g.id}`, g]])
   const fs = new Map<string, string>(g.nodes.map(n => [n.instructionsFile, `Instructions of ${n.name}.`] as const))
-  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id }, run: null }
+  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id }, run: null, agents: [] }
   const sent: Array<{ text: string; asUser?: boolean }> = []
   let spawned = 0
   const host = {

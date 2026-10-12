@@ -28,7 +28,7 @@ type Verdict = { decision: 'allow' | 'ask' | 'deny'; reason?: string }
 function memory(g: Graph, mocks: { check?: () => Promise<Verdict>; ask?: (question: string) => Promise<string> } = {}) {
   const kv = new Map<string, unknown>([[`graph:${g.id}`, g], ['graphs', [{ id: g.id, name: g.name }]]])
   const fs = new Map(Object.entries(filesOf(g)))
-  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id, task: 'Do it' }, run: null }
+  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id, task: 'Do it' }, run: null, agents: [] }
   const checks: unknown[] = []
   const questions: string[] = []
   const host = {

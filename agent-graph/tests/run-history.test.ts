@@ -25,7 +25,7 @@ const flow = (id: string, home = '.'): Graph => ({
 function memory(g: Graph, held: string[] = [], failing: string[] = []) {
   const kv = new Map<string, unknown>([[`graph:${g.id}`, g]])
   const fs = new Map<string, string>(g.nodes.map(n => [n.instructionsFile, `Instructions of ${n.name}.`] as const))
-  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id }, run: null }
+  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id }, run: null, agents: [] }
   const toasts: string[] = []
   let spawned = 0
   // Writes of the run view that fail, and what happens when an agent is started.
@@ -55,6 +55,7 @@ function memory(g: Graph, held: string[] = [], failing: string[] = []) {
     },
     tool: {
       register: async () => undefined,
+      list: async () => [],
       // TaskStop: the stopped agent's turn ends.
       call: async (input: { tool: string; task_id?: string }) => {
         if (input.tool === 'TaskStop') completions.complete({ agentId: input.task_id!, answer: '', reason: 'aborted' })

@@ -159,3 +159,55 @@ You can drop a graph file into `~/.claude/agent-graph/import/`. The mod imports 
 - When Claude runs a graph, the result comes back inside a frame that says it is data from the graph, not an instruction from you. The graph's output cannot close the frame.
 - Headless auto mode is not a safety boundary against a malicious graph. It judges each action against the card's prompt, and the graph's author wrote that prompt.
 - A Headless card's process inherits this session's environment, apart from six Claude Code variables that are blanked. The engine can only add variables, not remove them, so keys in your environment reach the card.
+
+## What happens when Claude Code starts and when you open the pane
+
+Your graphs are saved as files. The mod has to read them, and it has to tell Claude which tools exist (one per graph, plus `read_graph` and `edit_graph`). It does this in a short "load". The load reads each saved file once, and it reads the graphs side by side, not one after another.
+
+**When a session starts**
+
+1. The mod adds the `/agent-graph` command.
+2. At the same time, it loads your library:
+   - it imports any graph files in `~/.claude/agent-graph/import/` (they start untrusted, see "Shared graphs");
+   - it reads the list of your graphs once, then reads the graphs themselves side by side;
+   - it gives Claude one tool for each graph that can run, and the two editor tools;
+   - it asks Claude Code which graph tools are already there, and retires any that no longer match a graph (a graph deleted or broken from another session). Claude Code cannot remove a tool, so a retired tool stays in the list with a note saying "do not call this".
+3. It makes the screen agree with the files. If Claude Code was reloaded while the pane showed a run in progress, the pane now shows that run as stopped, because nothing is running it any more. If the open graph changed on disk, the pane shows the saved copy.
+4. If any tool could not be added, you see one message.
+
+The session start does not look for skills. That happens only when the pane opens.
+
+**When you open the pane (`/agent-graph`)**
+
+1. The load above runs again, so the pane always shows what is saved, also after another session changed it. With no graph open, the first graph opens.
+2. At the same time, the mod looks for your skills (see below).
+3. Before a graph is shown, the mod reads everything the pane needs for it (the cards' instruction files, the list of saved runs, the tests). The pane then draws once, with the graph and an empty selection, not with the new graph and the old selection.
+
+**How the tools are kept in step with the graphs**
+
+- Each edit saves the graph. If the tool for that graph would be exactly the same as the one Claude Code already has, the mod does not send it again. Moving a card with the arrow keys therefore sends nothing. Each send makes Claude Code reconnect the mod's tools, so this saves a lot of reconnects.
+- A tool is sent again when anything in it changes, for example the graph's name or description.
+- When Claude Code starts, or the plugins are reloaded, the mod remembers nothing, so it sends every tool once. There is no way to send them in one go.
+- If one tool cannot be added, the others are still added, and you get one message.
+- Loads never overlap. If you edit a graph while a load is running, the edit waits its turn.
+
+**Linked skills**
+
+- A card can name skills. The pane lists them in the card's "+ skill" picker, and Cloud uploads them.
+- Skills are folders with a `SKILL.md` file, in `~/.claude/skills` and in the project's `.claude/skills`. Many people keep their skills elsewhere and link them into these folders. The mod now follows such a link.
+- A link counts only if the folder it leads to is inside your home folder and has a `SKILL.md`. A link that leads outside your home folder is ignored.
+- Before, a card that named a linked skill said "Skill … was not found". Now it is found.
+- The picker takes at most 64 skills. If you have more, the card shows more than one picker: "+ skill", then "+ skill (name…)" where the name is the first skill of that picker. Every skill is in one of them.
+
+```mermaid
+flowchart TD
+    S[Session starts] --> C[Add /agent-graph command]
+    S --> L[Load library]
+    P[You open the pane] --> L
+    P --> K[Look for skills]
+    L --> I[Import files from the import folder]
+    I --> R[Read the graph list, then the graphs]
+    R --> T[Send tools that are new or changed]
+    T --> V[Retire tools of graphs that are gone]
+    V --> A[Make the screen agree with the files]
+```

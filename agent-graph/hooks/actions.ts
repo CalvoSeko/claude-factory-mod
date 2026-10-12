@@ -1,8 +1,9 @@
-import type { EngineInterface } from 'claude-code'
+import type { EngineInterface, ToolSpec } from 'claude-code'
 
-import type { AgentNode, BackendKind, Connecting, EdgeKind, Graph, NodeRecord, OutputFile, PaneUi, RunIndex, RunRecord, RunView, TestCase } from '../types'
+import type { AgentNode, BackendKind, Connecting, EdgeKind, Graph, GraphIndexEntry, NodeRecord, OutputFile, PaneUi, RunIndex, RunRecord, RunView, TestCase } from '../types'
 import { createApi, createSend, type Credential, type SkillFile } from './cloud/api'
 import { createTracker, type Tracker } from './activity'
+import { runPlan, workingAgents } from './band'
 import { createCloudBackend } from './cloud/backend'
 import { createMeter, hasLiveAgent, isCap, runSpend, usdText, type Meter, type Usage } from './cost'
 import { agentType, isCmdSafe, safeFileName, sha256Hex, type ContextSource } from './compile'
@@ -12,7 +13,7 @@ import { approvalQuestion, EDIT_SPEC, EDIT_TOOL, planEdit, type Plan } from './g
 import { graphText, listText, problemLines, READ_SPEC } from './graphtext'
 import { createGuard } from './guard'
 import { createHeadlessBackend } from './headless'
-import { asGraph, createLibrary, ID, inGraphFolder, INSTRUCTIONS_TEMPLATE, type KeyValue, type Library, type TextFiles } from './library'
+import { asGraph, byName, createLibrary, ID, inGraphFolder, INSTRUCTIONS_TEMPLATE, type KeyValue, type Library, type TextFiles } from './library'
 import { createCompletions, createLocalBackend, localKey } from './local'
 import {
   checkNode, connect, disconnect, freeSpot, incoming, isCheck, MAX_CHECK_TIMEOUT_MIN, MAX_RETRIES, newId, NODE_H, NODE_W, nextKind, nodeById, retype, reverse, runnableNodes, runStart,
@@ -21,8 +22,10 @@ import {
 import { fingerprintOf, graphForRun, helperActivity, planFromHere, RECORD_MAX_CHARS, recordOf, slimmed, staleOf } from './records'
 import { createRunStore } from './runstore'
 import { promptFor, reusedNeverRun, runGraph, type Backend, type Seed } from './runner'
+import { skillDirs as skillFolders } from './skills'
 import { PANE_ID, type Slots } from './state'
 import { createTestStore, gradePrompt, parseVerdict, testName } from './tests'
+import { createToolRegistry, retiredSpec, staleRunTools } from './tools'
 import { isTrusted, notTrustedText } from './trust'
 
 type Api = EngineInterface
@@ -34,17 +37,17 @@ type Api = EngineInterface
 export type Host = {
   env: { get: (name: 'USERPROFILE' | 'HOME' | 'OS' | 'CLAUDE_CODE_EXECPATH') => Promise<string | undefined> }
   store: { get: Api['store']['get']; set: Api['store']['set']; delete: Api['store']['delete'] }
-  fs: { exists: Api['fs']['exists']; read: (path: string) => Promise<string>; write: (path: string, text: string) => Promise<void>; list: Api['fs']['list'] }
+  fs: { exists: Api['fs']['exists']; read: (path: string) => Promise<string>; write: (path: string, text: string) => Promise<void>; list: Api['fs']['list']; stat: Api['fs']['stat'] }
   process: { run: Api['process']['run']; spawn: Api['process']['spawn'] }
-  tool: { register: Api['tool']['register']; call: (input: { tool: string }) => Promise<unknown>; check: Api['tool']['check'] }
+  tool: { register: Api['tool']['register']; call: (input: { tool: string }) => Promise<unknown>; check: Api['tool']['check']; list: Api['tool']['list'] }
   ui: { open: Api['ui']['open']; close: Api['ui']['close']; toast: Api['ui']['toast']; ask: Api['ui']['ask'] }
   session: { authorize: Api['session']['authorize'] }
   http: { fetch: Api['http']['fetch'] }
   clock: { after: Api['clock']['after']; now: Api['clock']['now'] }
-  agent: { register: Api['agent']['register']; spawn: Api['agent']['spawn'] }
+  agent: { register: Api['agent']['register']; spawn: Api['agent']['spawn']; list: Api['agent']['list'] }
   prompt: { submit: Api['prompt']['submit']; fill: Api['prompt']['fill'] }
   model: { complete: Api['model']['complete'] }
-  // The four pane values (state.ts), by name. register.tsx holds their atoms.
+  // The five values (state.ts), by name. register.tsx holds their atoms.
   read: <K extends keyof Slots>(slot: K) => Promise<Slots[K]>
   update: <K extends keyof Slots>(slot: K, change: (value: Slots[K]) => Slots[K]) => Promise<Slots[K]>
 }
@@ -211,6 +214,17 @@ export function trackTurnEnd(run: ActivityRun | undefined, e: { agentId?: string
   })
 }
 
+// The band's list of the session's working subagents, read again; written only when it changed, so the band
+// redraws only then. A list the engine refuses leaves the old one.
+export async function refreshAgents(host: Host): Promise<void> {
+  try {
+    const agents = workingAgents(await host.agent.list())
+    if (JSON.stringify(agents) !== JSON.stringify(await host.read('agents'))) await host.update('agents', () => agents)
+  } catch {
+    // The band keeps what it shows.
+  }
+}
+
 let controller: AbortController | undefined
 // The graph the current run belongs to (known from the start, before its first view is published).
 let controllerGraph: string | undefined
@@ -273,8 +287,17 @@ export function startHeartbeat(host: Host): () => void {
 
 // ---- engine adapters ----
 
-export async function homeDir(host: Host): Promise<string> {
-  return ((await host.env.get('USERPROFILE')) ?? (await host.env.get('HOME')) ?? '.').replace(/\\/g, '/')
+// Asked once per Host, i.e. once per hook dispatch (a module-wide memory would outlive a changed home); a
+// rejection is not kept.
+const homes = new WeakMap<Host, Promise<string>>()
+export function homeDir(host: Host): Promise<string> {
+  let home = homes.get(host)
+  if (home === undefined) {
+    home = (async () => ((await host.env.get('USERPROFILE')) ?? (await host.env.get('HOME')) ?? '.').replace(/\\/g, '/'))()
+    homes.set(host, home)
+    home.catch(() => homes.delete(host))
+  }
+  return home
 }
 
 // The folder that holds each graph's own folder (its instructions, runs, tests, inputs and Headless files).
@@ -355,21 +378,11 @@ const testStoreOf = async (host: Host) => createTestStore(filesOf(host), await g
 const runStoreOf = async (host: Host) => createRunStore(storeOf(host), filesOf(host), await graphsRoot(host))
 
 export async function skillDirs(host: Host): Promise<Record<string, string>> {
-  const found: Record<string, string> = {}
-  for (const root of [`${await homeDir(host)}/.claude/skills`, '.claude/skills']) {
-    try {
-      for (const entry of await host.fs.list(root)) {
-        if (entry.kind === 'dir' && (await host.fs.exists(`${root}/${entry.name}/SKILL.md`))) found[entry.name] = `${root}/${entry.name}`
-      }
-    } catch {
-      // No skills folder there.
-    }
-  }
-  return found
+  return skillFolders(host.fs, await homeDir(host))
 }
 
 // Module memory, so drawing the pane needs no file I/O on every frame: skill
-// names are refreshed when the pane opens and at session start; a node's
+// names are refreshed when the pane opens; a node's
 // instructions are read when it is selected, after Edit, and on a cache miss.
 let skillNamesCache: string[] = []
 const instructionsCache = new Map<string, string>()
@@ -487,13 +500,17 @@ async function credentialOf(host: Host): Promise<Credential | undefined> {
 // ---- library and pane state ----
 
 // Graphs saved as JSON files in <home>/.claude/agent-graph/import/ join the library; each file is removed once
-// it is in. Returns how many graphs joined.
-export async function importGraphs(host: Host): Promise<number> {
+// it is in. Returns how many graphs joined. Under the library lock, so an import cannot drop an entry another
+// write adds to the index.
+export const importGraphs = (host: Host): Promise<number> => exclusive(() => importUnlocked(host))
+
+async function importUnlocked(host: Host): Promise<number> {
   const dir = `${await homeDir(host)}/.claude/agent-graph/import`
-  if (!(await host.fs.exists(dir))) return 0
+  // A folder that cannot be listed is no folder.
+  const entries = await host.fs.list(dir).catch(() => [])
   const library = await libraryOf(host)
   let count = 0
-  for (const entry of await host.fs.list(dir)) {
+  for (const entry of entries) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
     const path = `${dir}/${entry.name}`
     try {
@@ -521,46 +538,127 @@ export async function refreshIndex(host: Host): Promise<void> {
   await host.update('index', () => list)
 }
 
-// The run tool of one graph (an untrusted graph, or one with problems, has none).
+// The tools this module instance sent (each register is an MCP reconnect): an unchanged spec is not sent again.
+const runTools = createToolRegistry()
+
+// An untrusted graph, or one with problems, has no run tool.
+const isRunnable = (g: Graph): boolean => isTrusted(g) && validate(withoutDisabled(g)).length === 0
+
+// The run tool of one graph, unless it is not runnable or this instance already sent the same spec.
 async function registerGraphTool(host: Host, g: Graph): Promise<void> {
-  if (!isTrusted(g) || validate(withoutDisabled(g)).length > 0) return
-  await host.tool.register({
+  if (!isRunnable(g)) return
+  const spec: ToolSpec = {
     name: toolName(g),
     description: `Runs the agent graph "${g.name}"${g.description !== '' ? `: ${g.description}` : ''}. The run happens in the background; its result arrives as a message when it finishes.`,
     inputSchema: { type: 'object', properties: { task: { type: 'string', description: 'What the graph should do' } }, required: ['task'] },
-  })
+  }
+  await runTools.register(host.tool, spec)
 }
 
-// The engine cannot unregister a tool, but registering a name again replaces it: the tool of a deleted graph
-// (or the old name of a renamed one) becomes a deferred note that says not to call it. Best effort.
-async function retireGraphTool(host: Host, g: Graph, why: 'deleted' | 'renamed'): Promise<void> {
+// The engine cannot unregister a tool, but registering a name again replaces it: a tool no graph should have
+// becomes a deferred note that says not to call it. Best effort.
+async function retireName(host: Host, name: string, why: string): Promise<void> {
   try {
-    await host.tool.register({
-      name: toolName(g),
-      description: `Retired: the agent graph "${g.name}" was ${why}. Do not call this tool.`,
-      inputSchema: { type: 'object', properties: {} },
-      isDeferred: true,
-    })
+    await runTools.register(host.tool, retiredSpec(name, why))
   } catch {
     // A stale tool that answers "no longer exists" is harmless.
   }
 }
 
-export async function registerGraphTools(host: Host): Promise<void> {
+// The tool of a deleted graph, or the old name of a renamed one.
+const retireGraphTool = (host: Host, g: Graph, why: 'deleted' | 'renamed'): Promise<void> =>
+  retireName(host, toolName(g), `the agent graph "${g.name}" was ${why}.`)
+
+// Every graph the index names, read side by side (an entry whose graph is gone is left out).
+const graphsOf = async (library: Library, index: GraphIndexEntry[]): Promise<Graph[]> =>
+  (await Promise.all(index.map(e => library.load(e.id)))).filter((g): g is Graph => g !== undefined)
+
+// Each graph's run tool on its own, so one that cannot be registered does not keep the others from theirs.
+// Returns why each failed. Without `graphs`, the library's.
+export async function registerGraphTools(host: Host, graphs?: Graph[]): Promise<string[]> {
   const library = await libraryOf(host)
-  for (const entry of await library.index()) {
-    const g = await library.load(entry.id)
-    if (g !== undefined) await registerGraphTool(host, g)
+  const failures: string[] = []
+  for (const g of graphs ?? (await graphsOf(library, await library.index()))) {
+    try {
+      await registerGraphTool(host, g)
+    } catch (error) {
+      failures.push(message(error))
+    }
   }
+  return failures
+}
+
+export type Loaded = { index: GraphIndexEntry[]; open: Graph | null }
+
+// The library as stored, read once: the index atom, the run tools and the open graph all come from that one read.
+// Under the library lock, so a load cannot interleave with an edit or another load (the last one read is the one
+// shown). `show`: make sure a graph is open (the pane is opening); else one opens only if the pane is open with none.
+export const loadLibrary = (host: Host, options: { show?: boolean } = {}): Promise<Loaded> => exclusive(() => loadUnlocked(host, options.show === true))
+
+// A run view no run of this module instance stands behind (the mod was reloaded while it went): ended, and every
+// agent that had not finished cancelled. Its record, if one was written, stays in history.
+const endedView = (run: RunView): RunView => ({
+  ...run,
+  isRunning: false,
+  nodes: Object.fromEntries(Object.entries(run.nodes).map(([id, v]) => [id, v.status === 'waiting' || v.status === 'paused' || v.status === 'running' ? { ...v, status: 'cancelled' as const } : v])),
+  result: run.result ?? 'Stopped: Agent Graph was reloaded while this run went.',
+})
+
+// Within one dispatch an atom reads as it was when the dispatch began, so this uses the values it read or wrote
+// and never reads again an atom it set.
+async function loadUnlocked(host: Host, show: boolean): Promise<Loaded> {
+  await importUnlocked(host)
+  const library = await libraryOf(host)
+  const index = await library.index()
+  const graphs = await graphsOf(library, index)
+  await host.update('index', () => index)
+  const failures = [...(await registerEditorTools(host)), ...(await registerGraphTools(host, graphs))]
+  // A run tool no runnable graph wants (gone, renamed elsewhere, not trusted, with problems) is retired.
+  const wanted = new Set(graphs.filter(isRunnable).map(toolName))
+  const listed = await host.tool.list().catch(() => undefined)
+  for (const name of staleRunTools(listed, wanted, TOOL_PREFIX, runTools)) await retireName(host, name, 'its agent graph is gone or cannot run now.')
+  const [run, was, ui] = await Promise.all([host.read('run'), host.read('graph'), host.read('ui')])
+  // Only when this module instance never started a run: a view that shows running then is one the mod left behind.
+  // (A run of this instance may end during the load, and this dispatch would still read it as running.)
+  if (runSerial === 0 && run?.isRunning === true) await host.update('run', r => (r?.isRunning === true ? endedView(r) : r))
+  // The open graph as stored (edited by another session, or gone); the pane's edits are saved before they show.
+  let open = was
+  if (was !== null) {
+    const stored = graphs.find(g => g.id === was.id) ?? (await library.load(was.id))
+    if (stored === undefined) {
+      await host.update('graph', () => null)
+      open = null
+    } else if (JSON.stringify(stored) !== JSON.stringify(was)) {
+      if (ui.selected !== null && !stored.nodes.some(c => c.id === ui.selected)) await host.update('ui', u => ({ ...u, selected: null }))
+      await host.update('graph', () => stored)
+      open = stored
+    }
+  }
+  if (open === null && (show || ui.isOpen)) {
+    open = graphs[0] ?? null
+    if (open !== null) await showGraph(host, open)
+    else open = await newGraphUnlocked(host, index)
+  }
+  const n = failures.length
+  if (n > 0) host.ui.toast(`Agent Graph: ${n} tool${n === 1 ? '' : 's'} could not be registered (${failures[0]}).`)
+  return { index, open }
 }
 
 // ---- read_graph ----
 
 const MAIN_ONLY = "agent-graph's read_graph and edit_graph are for the main conversation only."
 
-export async function registerEditorTools(host: Host): Promise<void> {
-  await host.tool.register(READ_SPEC)
-  await host.tool.register(EDIT_SPEC)
+// Each editor tool on its own, so one that cannot be registered does not keep the other from its. Returns why each failed.
+export async function registerEditorTools(host: Host): Promise<string[]> {
+  const failures: string[] = []
+  for (const spec of [READ_SPEC, EDIT_SPEC]) {
+    try {
+      await runTools.register(host.tool, spec)
+    } catch (error) {
+      failures.push(message(error))
+    }
+  }
+  return failures
 }
 
 // A graph by its id, else its exact name; a string says none matched.
@@ -834,17 +932,23 @@ async function notice(host: Host, text: string | null): Promise<void> {
   await host.update('ui', ui => ({ ...ui, notice: text }))
 }
 
-export async function openGraph(host: Host, id: string): Promise<void> {
-  const g = await (await libraryOf(host)).load(id)
-  if (g === undefined) return
-  await host.update('graph', () => g)
+// Shows a graph in the pane. The caches drawing reads are warm first (every agent's instructions, for fingerprints;
+// the saved runs; the tests), and the selection is cleared before the graph changes, so no frame shows the new
+// graph with the old selection or reads a file.
+async function showGraph(host: Host, g: Graph): Promise<void> {
+  await Promise.all([...g.nodes.map(n => loadInstructions(host, n)), loadRunIndex(host, g.id), loadTests(host, g.id)])
   await host.update('ui', ui => ({ ...ui, graphId: g.id, selected: null, connecting: null, notice: null, focus: undefined, approving: null }))
-  // Warm the caches drawing reads: every agent's instructions (for fingerprints) and the saved runs.
-  await Promise.all(g.nodes.map(n => loadInstructions(host, n)))
-  await loadRunIndex(host, g.id)
-  await loadTests(host, g.id)
+  await host.update('graph', () => g)
   await prefillTask(host, g.id)
 }
+
+// Inside the library lock only (it never nests).
+async function openUnlocked(host: Host, id: string): Promise<void> {
+  const g = await (await libraryOf(host)).load(id)
+  if (g !== undefined) await showGraph(host, g)
+}
+
+export const openGraph = (host: Host, id: string): Promise<void> => exclusive(() => openUnlocked(host, id))
 
 // A blank task box takes the task of the graph's newest run, from its record (the summary's line is clipped).
 async function prefillTask(host: Host, graphId: string): Promise<void> {
@@ -857,13 +961,16 @@ async function prefillTask(host: Host, graphId: string): Promise<void> {
   await host.update('ui', u => (u.task.trim() === '' ? { ...u, task } : u))
 }
 
-async function newGraphUnlocked(host: Host): Promise<void> {
+// `index` is the library's index as last read in this lock: the atom gets it with the new entry, not read again.
+async function newGraphUnlocked(host: Host, index: GraphIndexEntry[]): Promise<Graph> {
   const g = await (await libraryOf(host)).create('New graph')
-  await refreshIndex(host)
-  await openGraph(host, g.id)
+  await host.update('index', () => [...index, { id: g.id, name: g.name }].sort(byName))
+  await showGraph(host, g)
+  return g
 }
 
-export const newGraph = (host: Host): Promise<void> => exclusive(() => newGraphUnlocked(host))
+export const newGraph = (host: Host): Promise<void> =>
+  exclusive(async () => void (await newGraphUnlocked(host, await (await libraryOf(host)).index())))
 
 export async function togglePane(host: Host, keepOpen = false): Promise<void> {
   const ui = await host.read('ui')
@@ -872,14 +979,11 @@ export async function togglePane(host: Host, keepOpen = false): Promise<void> {
     await host.update('ui', u => ({ ...u, isOpen: false }))
     return
   }
-  await refreshSkills(host)
-  const open = await current(host)
-  if (open === null) {
-    const library = await libraryOf(host)
-    const first = (await library.index())[0]
-    if (first !== undefined) await openGraph(host, first.id)
-    else await newGraph(host)
-  } else {
+  const before = await current(host)
+  // The same files give the same list, graph and tools, also after another session's edits or an import; the
+  // skills (for the card picker) are read meanwhile; a scan that fails keeps the last list and does not stop the open.
+  const [, { open }] = await Promise.all([refreshSkills(host).catch(() => undefined), loadLibrary(host, { show: true })])
+  if (open !== null && open.id === before?.id) {
     // The instructions may have been edited while the pane was closed.
     await refreshInstructions(host, open)
     await prefillTask(host, open.id)
@@ -955,8 +1059,8 @@ export const deleteGraph = (host: Host): Promise<void> =>
     const list = await library.index()
     await host.update('index', () => list)
     const next = list.find(e => e.id !== g.id)
-    if (next !== undefined) await openGraph(host, next.id)
-    else await newGraphUnlocked(host)
+    if (next !== undefined) await openUnlocked(host, next.id)
+    else await newGraphUnlocked(host, list)
   })
 
 export const setBackend = (host: Host, backend: BackendKind): Promise<void> => edit(host, g => ({ ...g, backend }))
@@ -1457,13 +1561,15 @@ async function execute(host: Host, graph: Graph, task: string, backend: Backend,
     }
     await host.update('ui', closeCalls)
     stopHeartbeat = startHeartbeat(host)
+    // The band reads names and what comes next from the view, never from the library.
+    const plan = runPlan(graph)
     const outcome = await runGraph(graph, task, backend, {
       signal: ctl.signal,
       wait: waitOf(host),
       now: () => host.clock.now(),
       activity: run.tracker,
       onUpdate: async published => {
-        const view = { ...published, ...(canPause && options.step === true ? { step: true } : {}), ...(cap !== undefined ? { capUsd: cap } : {}) }
+        const view = { ...published, plan, ...(canPause && options.step === true ? { step: true } : {}), ...(cap !== undefined ? { capUsd: cap } : {}) }
         seen.view = view
         watchCap(published)
         await host.update('run', () => view)

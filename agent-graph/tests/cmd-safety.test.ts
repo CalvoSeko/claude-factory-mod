@@ -23,7 +23,7 @@ function memory(g: Graph, home: string, os: string | undefined, imports: Record<
     ...g.nodes.map(n => [n.instructionsFile, `Instructions of ${n.name}.`] as const),
     ...Object.entries(imports).map(([name, text]) => [`${importDir}/${name}`, text] as const),
   ])
-  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id }, run: null }
+  const slots: Slots = { index: [], graph: g, ui: { ...EMPTY_UI, graphId: g.id }, run: null, agents: [] }
   const toasts: string[] = []
   const argvs: string[][] = []
   const host = {

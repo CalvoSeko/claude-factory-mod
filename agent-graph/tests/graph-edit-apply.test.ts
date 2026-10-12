@@ -23,7 +23,7 @@ const flow = (id: string): Graph => ({
 function memory(graphs: Graph[], register: (spec: { name: string; description: string }) => Promise<void> = async () => undefined) {
   const kv = new Map<string, unknown>([...graphs.map(g => [`graph:${g.id}`, g] as const), ['graphs', graphs.map(g => ({ id: g.id, name: g.name }))]])
   const fs = new Map<string, string>(graphs.map(g => [`${ROOT}/${g.id}/w.md`, 'Write the draft.']))
-  const slots: Slots = { index: [], graph: graphs[0]!, ui: { ...EMPTY_UI, graphId: graphs[0]!.id, selected: 'w' }, run: null }
+  const slots: Slots = { index: [], graph: graphs[0]!, ui: { ...EMPTY_UI, graphId: graphs[0]!.id, selected: 'w' }, run: null, agents: [] }
   const host = {
     env: { get: async (name: string) => (name === 'USERPROFILE' ? HOME : undefined) },
     store: {

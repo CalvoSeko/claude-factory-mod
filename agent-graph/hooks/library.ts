@@ -25,6 +25,9 @@ export type Library = ReturnType<typeof createLibrary>
 const INDEX_KEY = 'graphs'
 const graphKey = (id: string) => `graph:${id}`
 
+// The order of the index.
+export const byName = (a: GraphIndexEntry, b: GraphIndexEntry): number => a.name.localeCompare(b.name)
+
 export { INSTRUCTIONS_TEMPLATE }
 
 export function createLibrary(store: KeyValue, files: TextFiles, root: string) {
@@ -41,7 +44,7 @@ export function createLibrary(store: KeyValue, files: TextFiles, root: string) {
     await store.set(graphKey(graph.id), graph)
     const list = (await index()).filter(e => e.id !== graph.id)
     list.push({ id: graph.id, name: graph.name })
-    list.sort((a, b) => a.name.localeCompare(b.name))
+    list.sort(byName)
     await store.set(INDEX_KEY, list)
   }
 

@@ -9,6 +9,7 @@ import {
   setRunCap, setTask, startConnect, stepRun, stopRun,
   toggleAllCalls, toggleAllRuns, toggleCall, toggleInputMore, toggleLastRunMore, togglePane, toggleTimeline, trustAndRun, useRunTask, type Host, type LastRun,
 } from './actions'
+import { bandLine, type Capped } from './band'
 import { ANTHROPIC_SKILLS } from './cloud/sync'
 import { cardsOf, clockTime, drawEdges, edgesOf, GLYPH, ROW_RATIO, SVG_LIMIT, timelineOf, timelineSpan, VEC_UNIT, vectorBaseSvg, vectorGlowSvg, type CanvasProps, type EdgeView, type TimelineCell } from './grid'
 import { capText, isCap, runSpend, usdText } from './cost'
@@ -28,10 +29,19 @@ export async function bandButton(host: Host, { Box, Button, Text }: BandParts): 
   const steps = run === null ? [] : Object.values(run.nodes).filter(v => v.calledBy === undefined)
   const total = steps.length
   const finished = steps.filter(v => v.status !== 'waiting' && v.status !== 'paused' && v.status !== 'running').length
+  const line = bandLine(run, await host.read('agents'))
+  const more = (part: Capped<unknown>) => (part.more > 0 ? <Text dimColor>+{part.more}</Text> : null)
   return (
-    <Box flexDirection="row" columnGap={1} alignItems="center">
+    <Box flexDirection="row" columnGap={1} alignItems="center" flexWrap="wrap">
       <Button key="agent-graph" hotkey="g" label={ui.isOpen ? 'Close graph' : '⧉ Agent Graph'} onPress={() => togglePane(host)} />
       {run?.isRunning === true ? <Text dimColor>◐ {run.graphName} {finished}/{total}</Text> : null}
+      {line.working.shown.flatMap(w => [<Text>{w.isHelper ? '↳' : '▶'} {w.name}</Text>, w.current !== undefined ? <Text dimColor>{w.current}</Text> : null])}
+      {more(line.working)}
+      {line.paused.shown.map(name => <Text>⏸ {name}</Text>)}
+      {more(line.paused)}
+      {line.next.shown.length > 0 ? <Text dimColor>next: {line.next.shown.join(', ')}{line.next.more > 0 ? ` +${line.next.more}` : ''}</Text> : null}
+      {line.agents.shown.map(a => <Text>⚙ {a.description} ({a.type})</Text>)}
+      {more(line.agents)}
     </Box>
   )
 }
@@ -54,6 +64,7 @@ const DELEGATE_BLUE = '#7c8db5'
 const CALLS_SHOWN = 30
 // An input, result or error shows up to this many characters.
 const CALL_TEXT_MAX = 2048
+const SELECT_MAX = 64 // the engine refuses a Select with more options
 const CALL_GLYPH = { running: { glyph: '●', color: ORANGE }, ok: { glyph: '✓', color: GREEN }, failed: { glyph: '✗', color: RED }, denied: { glyph: '⊘', color: undefined } } as const
 // Cuts at `max` characters (code points: a pair of UTF-16 units is never cut in half) and marks the cut.
 const clip = (text: string, max: number) => {
@@ -398,7 +409,14 @@ export async function drawPane(host: Host, parts: PaneParts, props: PaneProps): 
               : <Text dimColor>all added</Text>)}
           {listField('Skills', node.skills, 'none', s => patchNode(host, node.id, { skills: node.skills.filter(x => x !== s) }),
             skills.length > 0
-              ? <Select key={`add-skill-${node.id}`} label="+ skill" options={skills.map(s => ({ value: s }))} onSelect={v => patchNode(host, node.id, { skills: [...node.skills, v] })} />
+              ? (
+                // More skills than a Select takes (links count since they resolve) get one picker per SELECT_MAX.
+                <Box flexDirection="column">
+                  {Array.from({ length: Math.ceil(skills.length / SELECT_MAX) }, (_, i) => skills.slice(i * SELECT_MAX, (i + 1) * SELECT_MAX)).map((part, i) => (
+                    <Select key={`add-skill-${node.id}${i === 0 ? '' : `-${i + 1}`}`} label={i === 0 ? '+ skill' : `+ skill (${part[0]}…)`} options={part.map(s => ({ value: s }))} onSelect={v => patchNode(host, node.id, { skills: [...node.skills, v] })} />
+                  ))}
+                </Box>
+              )
               : <Text dimColor>all added</Text>)}
           {listField('Context', node.contextFiles, 'none', p => patchNode(host, node.id, { contextFiles: node.contextFiles.filter(x => x !== p) }),
             <Input key={`add-ctx-${node.id}`} placeholder="path/to/file-or-folder" submitLabel="Add" onSubmit={v => (v.trim() !== '' && !node.contextFiles.includes(v.trim()) ? patchNode(host, node.id, { contextFiles: [...node.contextFiles, v.trim()] }) : undefined)} />)}

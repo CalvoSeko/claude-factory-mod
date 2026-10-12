@@ -58,7 +58,7 @@ function memory(graphs: Graph[], imports: Record<string, string> = {}) {
   const importDir = `${HOME}/.claude/agent-graph/import`
   const kv = new Map<string, unknown>([...graphs.map(g => [`graph:${g.id}`, g] as const), ['graphs', graphs.map(g => ({ id: g.id, name: g.name }))]])
   const fs = new Map<string, string>(Object.entries(imports).map(([name, text]) => [`${importDir}/${name}`, text] as const))
-  const slots: Slots = { index: [], graph: graphs[0]!, ui: { ...EMPTY_UI, graphId: graphs[0]!.id, task: 'Do it' }, run: null }
+  const slots: Slots = { index: [], graph: graphs[0]!, ui: { ...EMPTY_UI, graphId: graphs[0]!.id, task: 'Do it' }, run: null, agents: [] }
   const tools: string[] = []
   const scheduled: (() => void)[] = []
   const host = {

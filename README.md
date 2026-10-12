@@ -5,6 +5,8 @@
 - **Cards and arrows.** Each card is an agent with its own instructions, skills, context files, tools, model and budget. A *handoff* arrow passes one agent's result to the next; a *delegate* arrow lets an agent call another as a helper; a *retry* arrow sends work back until a judge passes it.
 - **Check cards.** A card can run a shell command (tests, lint, type-check) instead of an agent; a failing check sends the work back along its retry arrow.
 - **Runs you can watch.** Cards show live status, cost and the tool calls each agent makes. Pause before a card, edit what an agent got and run from there, or rerun from any card.
+- **A band above the prompt.** During a run it shows which agents are working, which wait for you and which come next, and it lists the session's own subagents at work.
+- **Your skills, linked or not.** Skills installed as links (as `npx skills` installs them) count when they lead to a folder inside your home folder.
 - **Limits.** A budget per agent and a cap per run.
 - **Retries after temporary failures.** An agent stopped by a usage limit, an overload (429/529), a network or a server error is started again after 30 s, 2 min, then 5 min (or the stated reset time), up to 3 times.
 - **Local, Headless or Cloud.** Run agents as Claude Code subagents of your session, as their own headless Claude Code processes, or as Claude Managed Agents.

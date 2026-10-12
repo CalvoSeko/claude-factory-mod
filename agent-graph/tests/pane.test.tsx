@@ -2,6 +2,7 @@ import { expect, mock } from 'claude-code/testing'
 import { test } from './kit'
 import type { RenderElement } from 'claude-code'
 
+import { ANTHROPIC_SKILLS } from '../hooks/cloud/sync'
 import { ROW_RATIO } from '../hooks/grid'
 import { TOOL_CHOICES } from '../hooks/model'
 import type { Graph } from '../types'
@@ -182,5 +183,42 @@ test('a graph problem is listed once, in the toolbar list, not again in the insp
   expect(await pane.find({ key: 'problem-0' })).toBeDefined()
   expect(await pane.findAll({ type: 'Text', text: /The graph needs a name/ })).toHaveLength(0)
   expect(await pane.findAll({ type: 'Button', text: /The graph needs a name/ })).toHaveLength(1)
+  await pane.unmount()
+})
+
+// The pane lists the skills on disk and Anthropic's four: `total` skills all told, as the folders of ~/.claude/skills
+// answer the scan the pane makes when it opens. Returns the names as the pickers sort them.
+const plain = (path: string) => path.replace(/\\/g, '/')
+async function openWithSkills($: Args[0], on: Args[1], total: number) {
+  const names = Array.from({ length: total - ANTHROPIC_SKILLS.size }, (_, i) => `skill${String(i).padStart(2, '0')}`)
+  on('fs.list', (_$, e, next) => (plain(e.path).endsWith('.claude/skills') ?({ value: names.map(name => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })) } as never) : next(e)))
+  on('fs.exists', (_$, e) => ({ value: plain(e.path).endsWith('/SKILL.md') }) as never)
+  on('tool.register', () => ({ value: undefined }) as never)
+  const graph: Graph = { ...valid, edges: [], nodes: [node('a', 'Researcher', 2)] }
+  const pane = await openOn($, on, graph, 'terminal')
+  await pane.post({ events: [{ kind: 'down', x: 3, y: 2 }] })
+  return { pane, names: [...names, ...ANTHROPIC_SKILLS].sort() }
+}
+
+test('the skill picker holds at most 64 skills; the rest go in a second picker that adds to the card', async ($, on) => {
+  const { pane, names } = await openWithSkills($, on, 65)
+  const first = await pane.find({ key: 'add-skill-a' })
+  const second = await pane.find({ key: 'add-skill-a-2' })
+  expect((first?.props.options as unknown[]).length).toBe(64)
+  expect((second?.props.options as unknown[]).length).toBe(1)
+  expect(second?.props.label).toBe(`+ skill (${names[64]}…)`)
+  expect(await pane.find({ key: 'add-skill-a-3' })).toBeUndefined()
+  expect(await pane.find({ key: `rm-Skills-${names[64]}` })).toBeUndefined()
+  await pane.select({ key: 'add-skill-a-2', value: names[64]! })
+  // The card now lists the skill (with its remove button), and the 64 left fit one picker.
+  expect(await pane.find({ key: `rm-Skills-${names[64]}` })).toBeDefined()
+  expect(await pane.find({ key: 'add-skill-a-2' })).toBeUndefined()
+  await pane.unmount()
+})
+
+test('with 64 skills there is one picker', async ($, on) => {
+  const { pane } = await openWithSkills($, on, 64)
+  expect(((await pane.find({ key: 'add-skill-a' }))?.props.options as unknown[]).length).toBe(64)
+  expect(await pane.find({ key: 'add-skill-a-2' })).toBeUndefined()
   await pane.unmount()
 })

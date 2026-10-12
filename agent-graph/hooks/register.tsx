@@ -2,19 +2,20 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import {
-  activityRun, completions, editGraphTool, guard, importGraphs, libraryOf, meterStep, onCanvas, paneClosed, readGraphTool, refreshIndex, refreshSkills, registerEditorTools, registerGraphTools,
+  activityRun, completions, editGraphTool, guard, libraryOf, loadLibrary, meterStep, onCanvas, paneClosed, readGraphTool, refreshAgents,
   settings, startRun, togglePane, TOOL_PREFIX, toolName, trackSpawn, trackToolCall, trackTurnEnd, type Host,
 } from './actions'
 import type { CanvasPost } from './grid'
 import { bandButton, drawPane, type PaneParts } from './pane'
 import { EMPTY_UI, type Slots } from './state'
 
-// The four values of Slots (state.ts): the engine reads the atoms a module uses from
+// The five values of Slots (state.ts): the engine reads the atoms a module uses from
 // consts of that module's own file.
 const indexSlot = atom({ plugin: 'agent-graph', key: 'index' } as const, [] as Slots['index'])
 const graphSlot = atom({ plugin: 'agent-graph', key: 'graph' } as const, null as Slots['graph'])
 const uiSlot = atom({ plugin: 'agent-graph', key: 'ui' } as const, EMPTY_UI)
 const runSlot = atom({ plugin: 'agent-graph', key: 'run' } as const, null as Slots['run'])
+const agentsSlot = atom({ plugin: 'agent-graph', key: 'agents' } as const, [] as Slots['agents'])
 
 // The engine follows `$` only into functions declared in this file, so the
 // actions (in actions.ts) get this object of closures over it instead of `$`.
@@ -28,9 +29,10 @@ function hostOf($: EngineInterface): Host {
       read: path => $.fs.read(path),
       write: (path, text) => $.fs.write(path, text),
       list: path => $.fs.list(path),
+      stat: (path, options) => $.fs.stat(path, options),
     },
     process: { run: (argv, options) => $.process.run(argv, options), spawn: request => $.process.spawn(request) },
-    tool: { register: spec => $.tool.register(spec), call: input => $.tool.call(input as never), check: input => $.tool.check(input) },
+    tool: { register: spec => $.tool.register(spec), call: input => $.tool.call(input as never), check: input => $.tool.check(input), list: () => $.tool.list() },
     ui: {
       open: args => $.ui.open(args), close: args => $.ui.close(args), toast: (text, options) => $.ui.toast(text, options),
       ask: (question, options) => $.ui.ask(question, options),
@@ -38,19 +40,21 @@ function hostOf($: EngineInterface): Host {
     session: { authorize: () => $.session.authorize() },
     http: { fetch: (url, init) => $.http.fetch(url, init) },
     clock: { after: (ms, run) => $.clock.after(ms, run), now: () => $.clock.now() },
-    agent: { register: spec => $.agent.register(spec), spawn: args => $.agent.spawn(args) },
+    agent: { register: spec => $.agent.register(spec), spawn: args => $.agent.spawn(args), list: () => $.agent.list() },
     prompt: { submit: args => $.prompt.submit(args), fill: args => $.prompt.fill(args) },
     model: { complete: (request, options) => $.model.complete(request, options) },
-    // The state library wants atoms written in this file, so each of the four (state.ts) is spelled out.
+    // The state library wants atoms written in this file, so each of the five (state.ts) is spelled out.
     read: (slot =>
       slot === 'index' ? read($, indexSlot)
       : slot === 'graph' ? read($, graphSlot)
       : slot === 'ui' ? read($, uiSlot)
+      : slot === 'agents' ? read($, agentsSlot)
       : read($, runSlot)) as Host['read'],
     update: ((slot: keyof Slots, change: never) =>
       slot === 'index' ? update($, indexSlot, change)
       : slot === 'graph' ? update($, graphSlot, change)
       : slot === 'ui' ? update($, uiSlot, change)
+      : slot === 'agents' ? update($, agentsSlot, change)
       : update($, runSlot, change)) as unknown as Host['update'],
   }
 }
@@ -60,33 +64,20 @@ export const register: Register = (on, options) => {
   settings.workspaceId = typeof options['workspaceId'] === 'string' ? options['workspaceId'] : undefined
 
   on('session.start', async ($, e, next) => {
-    // A failure here must not keep the session start from going on.
-    try {
-      const host = hostOf($)
-      await $.command.register({ name: 'agent-graph', description: 'Open the agent graph editor' })
-      try {
-        await importGraphs(host)
-      } catch {
-        // A file that cannot be imported waits for the next try.
-      }
-      await refreshIndex(host)
-      await registerGraphTools(host)
-      await refreshSkills(host)
-      await registerEditorTools(host)
-    } catch {
-      // The pane and its tools come back on the next session start.
-    }
+    // A failure here must not keep the session start from going on; the UI may not be up for its toast.
+    const host = hostOf($)
+    await Promise.all([
+      $.command.register({ name: 'agent-graph', description: 'Open the agent graph editor' }).catch(() => undefined),
+      loadLibrary(host)
+        .catch(error => host.ui.toast(`Agent Graph could not load its graphs: ${error instanceof Error ? error.message : String(error)}`))
+        .catch(() => undefined),
+    ])
     return next(e)
   })
 
+  // Opening the pane loads the library (graphs saved to the import folder since the session started join).
   on('command.run', { command: 'agent-graph' }, async $ => {
-    const host = hostOf($)
-    // Graphs saved to the import folder since the session started join before the pane opens.
-    if ((await importGraphs(host).catch(() => 0)) > 0) {
-      await refreshIndex(host)
-      await registerGraphTools(host)
-    }
-    await togglePane(host, true)
+    await togglePane(hostOf($), true)
     return { text: 'Agent Graph opened.' }
   })
 
@@ -157,7 +148,12 @@ export const register: Register = (on, options) => {
     ({ result: await editGraphTool(hostOf($), { graph: e.graph, changes: e.changes }, { agentId: e.agentId, signal: next.signal }) }) as never)
 
   // A spawn under an agent of the run nests the child's calls under the parent's delegate call.
-  on('agent.spawn', ($, e, next) => trackSpawn(activityRun(), e, () => next(e)))
+  // Once it started, the band's subagent list is read again.
+  on('agent.spawn', async ($, e, next) => {
+    const answer = await trackSpawn(activityRun(), e, () => next(e))
+    await refreshAgents(hostOf($))
+    return answer
+  })
 
   // The price of each model request of a Local agent of the run goes into its meter. Anything else only passes.
   on('turn.step', async function* ($, e, next) {
@@ -172,7 +168,7 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('turn.complete', ($, e, next) => {
+  on('turn.complete', async ($, e, next) => {
     trackTurnEnd(activityRun(), e)
     if (e.agentId !== undefined) {
       completions.complete({
@@ -182,6 +178,17 @@ export const register: Register = (on, options) => {
         ...(e.reason === 'refusal' ? { refusal: e.refusal.explanation ?? e.refusal.category ?? undefined } : {}),
       })
     }
-    return next(e)
+    const answer = await next(e)
+    // A subagent's turn ended: the band's list is read again now, and 2 s on, as the engine may still list it as running.
+    if (e.agentId !== undefined) {
+      const host = hostOf($)
+      await refreshAgents(host)
+      try {
+        host.clock.after(2000, () => void refreshAgents(host))
+      } catch {
+        // The list read just now stands.
+      }
+    }
+    return answer
   })
 }
